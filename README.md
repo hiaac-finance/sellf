@@ -1,6 +1,6 @@
 ## Repository for the ICLR paper "A Causal Lens for Learning Long-term Fair Policies."
 
-The **environment.yml** file contains all the dependencies to run this code and can be installed using Anaconda. It has only been tested on Linux systems. The key requiremnts are Python, PyTorch, gym, stable-baselines3, and geomloss (geomloss is only for running F-PPO-L).
+The **environment.yml** file contains all the dependencies to run this code and can be installed using Anaconda. It has only been tested on Linux systems. The key requirements are Python, PyTorch, gym, stable-baselines3, and geomloss (geomloss is only for running F-PPO-L).
 
 Once requirements are installed, you can run the code with the command
 
