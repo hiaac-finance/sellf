@@ -85,8 +85,9 @@ def plot_g_by_group_over_time(tot_eval_data, path, g_type='g_sum'):
     else:
         g = "g"
         policy = 'pi'
-    plt.ylabel(f"Qual change ({g})", fontsize=15)
-    plt.title(f"Qualification Gain by Group over time", fontsize=15)
+    #plt.ylabel(f"Qual change ({g})", fontsize=15)
+    plt.ylabel(d_name, fontsize=15)
+    #plt.title(f"Qualification Gain by Group over time", fontsize=15)
     plt.legend(fontsize=12)
     plt.xticks(fontsize=12)
     plt.yticks(fontsize=12)

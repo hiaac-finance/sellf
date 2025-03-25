@@ -63,6 +63,16 @@ class PPOEnvWrapper(gym.Wrapper):
     self.delta = np.zeros(1, )
     self.old_bank_cash = 0
 
+    # --- NEW ---
+    # OBSERVED MEASURE OF DISPARITY
+    self.tp_obs = np.zeros(self.env.state.params.num_groups,)
+    self.fp_obs = np.zeros(self.env.state.params.num_groups,)
+    self.tn_obs = np.zeros(self.env.state.params.num_groups,)
+    self.fn_obs = np.zeros(self.env.state.params.num_groups,)
+    self.tpr_obs = np.zeros(self.env.state.params.num_groups,)
+    self.acc = np.zeros(self.env.state.params.num_groups,)
+    self.acc_obs = np.zeros(self.env.state.params.num_groups,)
+    
     if is_eval:
       self.ep_timesteps = config_params.EVAL_EP_TIMESTEPS
       self.ZETA_0 = config_params.EVAL_ZETA_0
@@ -75,6 +85,7 @@ class PPOEnvWrapper(gym.Wrapper):
 
     self.QUAL_CHANGE = config_params.QUAL_CHANGE
     self.WINDOW = config_params.WINDOW
+    self.ONLY_OBSERVATION = config_params.ONLY_OBSERVATION
 
   def process_observation(self, obs):
     credit_score = obs['applicant_features']
@@ -109,6 +120,14 @@ class PPOEnvWrapper(gym.Wrapper):
       out=np.zeros_like(tp),
       where=(tp + fn) != 0
     )
+  
+  def compute_acc(self, tp, fn, tn, fp):
+    return np.divide(
+      tp + tn,
+      tp + fn + tn + fp,
+      out = np.zeros_like(tp),
+      where=(tp + fn + tn + fp) != 0 
+    )
 
   def reset(self):
     self.timestep = 0
@@ -120,6 +139,16 @@ class PPOEnvWrapper(gym.Wrapper):
     self.delta = np.zeros(1, )
     self.old_bank_cash = 0
     self.delta_delta = 0
+
+    # --- NEW ---
+    # OBSERVED MEASURE OF DISPARITY
+    self.tp_obs = np.zeros(self.env.state.params.num_groups,)
+    self.fp_obs = np.zeros(self.env.state.params.num_groups,)
+    self.tn_obs = np.zeros(self.env.state.params.num_groups,)
+    self.fn_obs = np.zeros(self.env.state.params.num_groups,)
+    self.tpr_obs = np.zeros(self.env.state.params.num_groups,)
+    self.acc = np.zeros(self.env.state.params.num_groups,)
+    self.acc_obs = np.zeros(self.env.state.params.num_groups,)
 
     # ----------------------------------- add history and population ----------------------------
     self.history = np.zeros((self.env.state.params.num_groups, self.env.observation_space['applicant_features'].shape[0]))
@@ -182,6 +211,18 @@ class PPOEnvWrapper(gym.Wrapper):
       else:
         self.fn[group_id] += 1
 
+    # --- NEW ---
+    # UPDATE OBSERVED (and non-observed) MEASURES
+    if action == 1:
+      # Check if individual would default
+      if self.env.state.will_default:
+        self.fp_obs[group_id] += 1
+      else:
+        self.tp_obs[group_id] += 1
+      
+    elif action == 0: # CONSIDER THAT ALWAYS IS DEFAULT
+      self.tn_obs[group_id] += 1
+
     next_x = self.next_x_given_action(action)
 
     g_r = self.QUAL_CHANGE(curr_x, next_x)
@@ -191,6 +232,9 @@ class PPOEnvWrapper(gym.Wrapper):
     self.tpr = self.compute_tpr(tp=self.tp,
                                 fn=self.fn)
     self.old_bank_cash = self.env.state.bank_cash
+    self.tpr_obs = self.compute_tpr(tp=self.tp_obs, fn=self.fn_obs)
+    self.acc = self.compute_acc(tp=self.tp, fn=self.fn, tn=self.tn, fp=self.fp)
+    self.acc_obs = self.compute_acc(tp=self.tp_obs, fn=self.fn_obs, tn=self.tn_obs, fp=self.fp_obs)
 
     # Update delta terms (for A-PPO)
     self.delta = np.abs(self.tpr[0] - self.tpr[1])
@@ -231,7 +275,7 @@ class PPOEnvWrapper(gym.Wrapper):
 
     r = self.reward_fn(old_bank_cash=self.old_bank_cash,
                        bank_cash=self.env.state.bank_cash,
-                       tpr=self.tpr,
+                       tpr=self.tpr_obs if self.ONLY_OBSERVATION else self.tpr,
                        zeta0=self.ZETA_0,
                        zeta1=self.ZETA_1)
 

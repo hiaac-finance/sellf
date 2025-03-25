@@ -156,6 +156,10 @@ def evaluate(env, agent, num_eps, name, seeds, eval_path, config_params, algorit
         'tot_g_sum': np.zeros((num_eps, num_timesteps, NUM_GROUPS)), # total qualification gain by group per timestep per episode
         'tot_loans_over_time_by_cscore': np.zeros((num_eps, num_timesteps,  NUM_GROUPS, num_cscores)), 
         'tot_cscore_seen_over_time': np.zeros((num_eps, num_timesteps,  NUM_GROUPS, num_cscores)),
+        'tot_tpr_over_time' : np.zeros((num_eps, num_timesteps, NUM_GROUPS)),
+        'tot_tpr_obs_over_time' : np.zeros((num_eps, num_timesteps, NUM_GROUPS)),
+        "tot_acc_over_time" : np.zeros((num_eps, num_timesteps, NUM_GROUPS)),
+        "tot_acc_obs_over_time" : np.zeros((num_eps, num_timesteps, NUM_GROUPS)),        
         # -------------------------------------------------------------------
     }
 
@@ -207,6 +211,12 @@ def evaluate(env, agent, num_eps, name, seeds, eval_path, config_params, algorit
 
             old_bank_cash = env.state.bank_cash
 
+            # --- NEW ---
+            eval_data['tot_tpr_over_time'][ep][t] = env.tpr
+            eval_data['tot_tpr_obs_over_time'][ep][t] = env.tpr_obs
+            eval_data['tot_acc_over_time'][ep][t] = env.acc
+            eval_data['tot_acc_obs_over_time'][ep][t] = env.acc_obs
+
             benefit_delta = agent.benefit_deltas_dict[group_id][curr_x]
 
             next_obs, rew, done, info, gx, gx_pi0, action_pi0, next_x_pi0 = env.step(action)
@@ -240,6 +250,10 @@ def plot_figures(eval_path):
 
     plot_bank_cash_over_time(eval_data, eval_path)
     plot_g_by_group_over_time(eval_data, eval_path)
+    plot_g_by_group_over_time(eval_data, eval_path, "tpr_over_time")
+    plot_g_by_group_over_time(eval_data, eval_path, "tpr_obs_over_time")
+    plot_g_by_group_over_time(eval_data, eval_path, "acc_over_time")
+    plot_g_by_group_over_time(eval_data, eval_path, "acc_obs_over_time")
     plot_g_disparity_over_time(eval_data, eval_path, "g_sum")
 
 
