@@ -111,6 +111,7 @@ class RolloutBuffer(BaseBuffer):
         self.returns, self.episode_starts, self.values, self.log_probs = None, None, None, None
         self.deltas = None
         self.generator_ready = False
+        self.ys = None
 
         self.num_groups = num_groups
         self.group_size = group_size
@@ -125,6 +126,7 @@ class RolloutBuffer(BaseBuffer):
 
     def reset(self) -> None:
         self.observations = np.zeros((self.buffer_size, self.n_envs) + self.obs_shape, dtype=np.float32)
+        self.ys = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
         self.actions = np.zeros((self.buffer_size, self.n_envs, self.action_dim), dtype=np.float32)
         self.rewards = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
         self.returns = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
@@ -311,6 +313,7 @@ class RolloutBuffer(BaseBuffer):
     def add(
         self,
         obs: np.ndarray,
+        ys: np.ndarray,
         action: np.ndarray,
         reward: np.ndarray,
         episode_start: np.ndarray,
@@ -350,6 +353,7 @@ class RolloutBuffer(BaseBuffer):
             obs = obs.reshape((self.n_envs,) + self.obs_shape)
 
         self.observations[self.pos] = np.array(obs).copy()
+        self.ys[self.pos] = np.array(ys).copy()
         self.actions[self.pos] = np.array(action).copy()
         self.rewards[self.pos] = np.array(reward).copy()
         self.episode_starts[self.pos] = np.array(episode_start).copy()
@@ -380,6 +384,7 @@ class RolloutBuffer(BaseBuffer):
 
             _tensor_names = [
                 "observations",
+                "ys",
                 "actions",
                 "values",
                 "log_probs",
@@ -413,6 +418,7 @@ class RolloutBuffer(BaseBuffer):
     def _get_samples(self, batch_inds: np.ndarray, env: Optional[VecNormalize] = None) -> RolloutBufferSamples:
         data = (
             self.observations[batch_inds],
+            self.ys[batch_inds],
             self.actions[batch_inds],
             self.values[batch_inds].flatten(),
             self.log_probs[batch_inds].flatten(),
@@ -429,6 +435,7 @@ class RolloutBuffer(BaseBuffer):
             self.expected_v_base[batch_inds].flatten(),
             # --------------------------------------------------------------
         )
+
         return RolloutBufferSamples(*tuple(map(self.to_torch, data)))
     
 
@@ -466,6 +473,7 @@ class DummyEvalBuffer:
     def reset(self) -> None:
         self.observations = np.zeros((self.buffer_size, self.n_envs) + self.obs_shape, dtype=np.float32)
         self.actions = np.zeros((self.buffer_size, self.n_envs, self.action_dim), dtype=np.float32)
+        self.ys = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
         # --------------------------------- add new part --------------------------------
         self.q_values = np.zeros((self.buffer_size, self.n_envs, 2), dtype=np.float32)
         self.q_advs = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
@@ -523,6 +531,7 @@ class DummyEvalBuffer:
         self,
         obs: np.ndarray,
         action: np.ndarray,
+        ys: np.ndarray,
         # ------------------------------- add new vars -----------------------
         gx: np.ndarray,
         curr_x: int,
@@ -537,6 +546,7 @@ class DummyEvalBuffer:
         self.observations[self.pos] = np.array(obs).copy()
 
         self.actions[self.pos] = np.array(action).copy()
+        self.ys[self.pos] = np.array(ys).copy()
         # ------------------------------- add one variable -----------------------
         self.gx[self.pos] = np.array(gx).copy()
         self.curr_x[self.pos] = np.array(curr_x).copy()
