@@ -1,5 +1,6 @@
 import time
 from typing import Any, Dict, List, Optional, Tuple, Type, Union, Set
+from tqdm import tqdm
 
 import gym
 import numpy as np
@@ -292,8 +293,9 @@ class OnPolicyAlgorithm(BaseAlgorithm):
         )
 
         callback.on_training_start(locals(), globals())
-
+        pbar = tqdm(total = total_timesteps + 1)
         while self.num_timesteps < total_timesteps:
+            old_timesteps = self.num_timesteps
 
             continue_training = self.collect_rollouts(self.env, callback, self.rollout_buffer, iteration, n_rollout_steps=self.n_steps)
 
@@ -316,6 +318,8 @@ class OnPolicyAlgorithm(BaseAlgorithm):
                 self.logger.dump(step=self.num_timesteps)
                 
             self.train()
+            pbar.update(self.num_timesteps - old_timesteps)
+        pbar.close()
 
         callback.on_training_end()
 

@@ -368,8 +368,21 @@ def main(conf=config, arg_train=False, arg_eval=False, is_outside_func_call=Fals
                     eval_paths.append(os.path.join(args.eval_path, m_name))
                 
             else:
+                base_path = conf.SAVE_DIR
+                weights_step = model_path.split('/')[-1]
+                seed_dirs = [f for f in os.listdir(base_path) if os.path.isdir(os.path.join(base_path, f))]
+                seed_dir = seed_dirs[0]
+                model_path = os.path.join(base_path, seed_dir, weights_step)
                 env = DelayedImpactEnv(env_params)
                 agent = PPO.load(model_path, verbose=1)
+
+                new_ben_dict = {}
+                for k, v in agent.benefit_deltas_dict.items(): 
+                    for x_k, x_v in v.items():
+                        if int(k) not in new_ben_dict:
+                            new_ben_dict[int(k)] = {}
+                        new_ben_dict[int(k)][int(x_k)] = x_v
+                agent.benefit_deltas_dict = new_ben_dict 
                 
                 evaluate(env=PPOEnvWrapper(env=env, reward_fn=LendingReward, config_params=conf, is_eval=True),
                         agent=agent,
