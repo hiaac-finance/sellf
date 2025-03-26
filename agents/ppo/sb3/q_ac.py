@@ -48,6 +48,7 @@ class QActorCriticPolicy(ActorCriticPolicy):
         ``th.optim.Adam`` by default
     :param optimizer_kwargs: Additional keyword arguments,
         excluding the learning rate, to pass to the optimizer
+    :param predict_labels: Whether to predict labels or not
     """
 
     def __init__(
@@ -69,6 +70,7 @@ class QActorCriticPolicy(ActorCriticPolicy):
         normalize_images: bool = True,
         optimizer_class: Type[th.optim.Optimizer] = th.optim.Adam,
         optimizer_kwargs: Optional[Dict[str, Any]] = None,
+        predict_labels: bool = False,
     ):
         super(QActorCriticPolicy, self).__init__(
             observation_space,
@@ -90,7 +92,20 @@ class QActorCriticPolicy(ActorCriticPolicy):
             optimizer_kwargs,
         )
 
-    
+        self.predict_labels = predict_labels
+        if self.predict_labels:
+            # set model
+            self.label_predictor = nn.Sequential(
+                nn.Linear(self.features_dim, 128),
+                nn.ReLU(),
+                nn.Linear(128, 64),
+                nn.ReLU(),
+                nn.Linear(64, 2),
+            )
+
+        # small workaround to include new network on optimizer
+        self.optimizer = self.optimizer_class(self.parameters(), lr=lr_schedule(1), **self.optimizer_kwargs)
+
     def forward(self, obs: th.Tensor, deterministic: bool = False) -> Tuple[th.Tensor, th.Tensor, th.Tensor]:
         """
         Forward pass in all the networks (actor and critic)
@@ -158,3 +173,14 @@ class QActorCriticPolicy(ActorCriticPolicy):
         log_prob = distribution.log_prob(actions)
 
         return th.exp(log_prob)
+    
+    def predict_label(self, obs: th.Tensor) -> Tuple[th.Tensor, th.Tensor]:
+        """
+        Get probability of being a positive label given the observations.
+
+        :param obs:
+        :return: probability of loans
+        """
+        # Preprocess the observation if needed
+        features = self.extract_features(obs)
+        return self.label_predictor(features)

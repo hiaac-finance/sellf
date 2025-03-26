@@ -8,12 +8,17 @@ class Config:
     PPO_SKL = False
     A_PPO = False
     F_PPO_BD = False
+    PPO_PF = False # my algorithm
+    PPO_PF_IMP = False # my algorithm with imputation
 
-    PPO_C = True
+    # PPO_C = True
     # PPO_CB = True
     # PPO_SKL = True
     # A_PPO = True
     # F_PPO_BD = True
+    #PPO_PF = True
+    PPO_PF_IMP = True
+
 
     #--------------F-PPO and A-PPO specific-----
     REGULARIZE_ADVANTAGE = False
@@ -47,6 +52,9 @@ class Config:
 
     STATIC_KL_TARG = 0.000001
 
+    BETA_PF = 0.0
+    IMPUTATION = False
+
     if PPO_SKL:
         MODEL = f'PPO'
         KL_PEN = True
@@ -78,7 +86,16 @@ class Config:
         BETA_2 = 0.
         BETA_3 = 1.12                  
         BETA_4 = 1.  
-
+    elif PPO_PF:
+        MODEL = "PPO-PF"
+        BETA_PF = 0.75
+        KL_PEN = True
+    elif PPO_PF_IMP:
+        MODEL = "PPO-PF-IMP"
+        BETA_PF = 0.75
+        KL_PEN = True
+        IMPUTATION = True
+    
 
     RESULTS_DIR = './results_setting1'
     ########## Experiment Setup Parameters ##########
@@ -91,7 +108,7 @@ class Config:
     }
 
     NUM_ENVS = 1    # Number of parallel environments to run, will break if not 1
-    NUM_T_SEEDS = 5  # how many training seeds to use for each model
+    NUM_T_SEEDS = 1  # how many training seeds to use for each model
     LOG_FULL_EPISODES = False
     LOG_EP_FREQ = 25
 
@@ -151,12 +168,12 @@ class Config:
     BATCH_SIZE = 50
     N_EPOCHS = 10
 
-    TRAIN_TIMESTEPS = 500_000  # Total train time
+    TRAIN_TIMESTEPS = 200_000  # Total train time
 
     LEARNING_RATE = 0.00001
     POLICY_KWARGS = dict(activation_fn=torch.nn.ReLU,
                         net_arch = [256, 256, dict(vf=[256, 128], pi=[256, 128])])
-    SAVE_FREQ = 500_000
+    SAVE_FREQ = TRAIN_TIMESTEPS
 
     SEED = 2023 # initial seed
 
@@ -175,7 +192,7 @@ class Config:
         )
 
 
-
-
+    # --- NEW ---
+    ONLY_OBSERVATION = False
 
 

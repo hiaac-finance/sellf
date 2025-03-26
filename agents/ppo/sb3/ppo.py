@@ -180,7 +180,10 @@ class PPO(OnPolicyAlgorithm):
         self.B_EPSILON = config_params.B_EPSILON
 
         self.BETA_LAMBDA = config_params.BETA_LAMBDA
+
+        # --- NEW ---
         self.BETA_PF = config_params.BETA_PF
+        self.IMPUTATION = config_params.IMPUTATION
 
         self.config = config_params
 
@@ -379,6 +382,16 @@ class PPO(OnPolicyAlgorithm):
                     #         y1 = self.policy.predict_target(rollout_data.observations).view(-1,1)    
                     # #     else:
                     ys = rollout_data.ys
+
+                    # --- test predict labels ---
+                    if self.IMPUTATION:
+                        with torch.no_grad():
+                            ys_pred = self.policy.predict_label(rollout_data.observations)
+                            ys_pred = torch.argmax(ys_pred, dim=1).view(-1, 1).to(torch.float32)
+                        # replace y_pred with y1 for imputation
+                        ys[rollout_data.actions == 0] = ys_pred[rollout_data.actions == 0]
+
+                    
                     # ys_idxs = ys.nonzero().flatten()
                     # # get indexes that are from at g0_idxs and y1_idxs
                     # ys_g0_idxs = np.intersect1d(ys_idxs, g0_idxs)
@@ -460,13 +473,14 @@ class PPO(OnPolicyAlgorithm):
                 # --- NEW ---
                 # predict label loss
                 # if self.imputation:
-                #    ys_pred = self.policy.predict_target(rollout_data.observations).view(-1,1)
-                #    ys = rollout_data.ys
-                #    prediction_loss = F.binary_cross_entropy(ys_pred, ys)
-                # 
+                if self.IMPUTATION:
+                    ys_pred = self.policy.predict_label(rollout_data.observations)
+                    ys = rollout_data.ys
+                    prediction_loss = F.cross_entropy(ys_pred, ys.to(torch.long).flatten())
+                else:
+                    prediction_loss = 0
 
-
-                loss = policy_loss + self.ent_coef * entropy_loss + self.vf_coef * value_loss
+                loss = policy_loss + self.ent_coef * entropy_loss + self.vf_coef * value_loss + prediction_loss
                 # Calculate approximate form of reverse KL Divergence for early stopping
                 # see issue #417: https://github.com/DLR-RM/stable-baselines3/issues/417
                 # and discussion in PR #419: https://github.com/DLR-RM/stable-baselines3/pull/419

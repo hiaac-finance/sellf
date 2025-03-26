@@ -159,6 +159,7 @@ class OnPolicyAlgorithm(BaseAlgorithm):
             self.action_space,
             self.lr_schedule,
             use_sde=self.use_sde,
+            predict_labels=self.config.IMPUTATION,
             **self.policy_kwargs  # pytype:disable=not-instantiable
         )
 
