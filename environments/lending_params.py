@@ -35,6 +35,7 @@ class Applicant(object):
   group = attr.ib()  # type: Sequence[int]
   will_default = attr.ib()  # type: bool
   credit_drift = attr.ib() # type: int
+  y = attr.ib(default=0) # type: int
 
   def __attrs_post_init__(self):
     self.dim = len(self.features)

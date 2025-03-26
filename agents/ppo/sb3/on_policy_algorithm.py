@@ -256,7 +256,7 @@ class OnPolicyAlgorithm(BaseAlgorithm):
             # ---------------------------------- add terms ------------------
             long_delta = torch.tensor(np.array(env.get_attr('dist_dist')))
 
-            ys = np.array([env.get_attr("state")[0].will_default]).astype(np.float32)
+            ys = np.array([env.get_attr("state")[0].y]).astype(np.float32)
             rollout_buffer.add(self._last_obs, ys, actions, rewards, self._last_episode_starts, values, log_probs, delta, delta_delta, long_delta, gx, q_log_probs, curr_x, next_x, gx_pi0, action_pi0, next_x_pi0, curr_g_benefit_delta)
             # ----------------------------------------------------------------
             self._last_obs = new_obs

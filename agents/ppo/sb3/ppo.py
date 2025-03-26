@@ -180,6 +180,7 @@ class PPO(OnPolicyAlgorithm):
         self.B_EPSILON = config_params.B_EPSILON
 
         self.BETA_LAMBDA = config_params.BETA_LAMBDA
+        self.BETA_PF = config_params.BETA_PF
 
         self.config = config_params
 
@@ -371,6 +372,43 @@ class PPO(OnPolicyAlgorithm):
                         policy_loss = -(ppo_loss - self.BETA_C_PI*c_pi_theta - self.static_kl_coeff*static_kl_d - self.BETA_LAMBDA * lambda_loss)
                     else:
                         policy_loss = -(ppo_loss - self.BETA_C_PI*c_pi_theta - self.BETA_LAMBDA * lambda_loss)
+                elif self.BETA_PF > 0:
+                    # --- NEW ---  
+                        # get positive labels
+                    #    if self.imputation:
+                    #         y1 = self.policy.predict_target(rollout_data.observations).view(-1,1)    
+                    # #     else:
+                    ys = rollout_data.ys
+                    # ys_idxs = ys.nonzero().flatten()
+                    # # get indexes that are from at g0_idxs and y1_idxs
+                    # ys_g0_idxs = np.intersect1d(ys_idxs, g0_idxs)
+                    # ys_g1_idxs = np.intersect1d(ys_idxs, g1_idxs)
+                    # if len(ys_g0_idxs) == 0:
+                    #     pa1_g0 = 0
+                    # else:
+                    #     pa1_g0 = self.policy.prob_loan(rollout_data.observations[ys_g0_idxs]).mean()
+                    
+                    # if len(ys_g1_idxs) == 0:
+                    #     pa1_g1 = 0
+                    # else:
+                    #     pa1_g1 = self.policy.prob_loan(rollout_data.observations[ys_g1_idxs]).mean()
+                    # disp = (pa1_g0 - pa1_g1)**2
+
+                    p = self.policy.prob_loan(rollout_data.observations).view(-1,1)
+                    # calculate binary cross entropy
+                    xen = F.binary_cross_entropy(p, ys, reduction='none')
+                    disp = xen[g0_idxs].mean() - xen[g1_idxs].mean()
+                    disp = disp**2
+                    
+                    if self.KL_PEN:
+                        policy_loss = -(ppo_loss - self.BETA_PF * disp - self.static_kl_coeff*static_kl_d)
+                    else:
+                        policy_loss = -(ppo_loss - self.BETA_PF * disp)
+
+                    with torch.no_grad():
+                        c_pi_theta = th.tensor(0.0).to(self.device)
+                        lambda_loss = th.tensor(0.0).to(self.device)
+                        lambda_losses.append(lambda_loss.item())
 
                 else:
                 # loss for other variants 
@@ -418,6 +456,15 @@ class PPO(OnPolicyAlgorithm):
                     entropy_loss = -th.mean(entropy)
 
                 entropy_losses.append(entropy_loss.item())
+
+                # --- NEW ---
+                # predict label loss
+                # if self.imputation:
+                #    ys_pred = self.policy.predict_target(rollout_data.observations).view(-1,1)
+                #    ys = rollout_data.ys
+                #    prediction_loss = F.binary_cross_entropy(ys_pred, ys)
+                # 
+
 
                 loss = policy_loss + self.ent_coef * entropy_loss + self.vf_coef * value_loss
                 # Calculate approximate form of reverse KL Divergence for early stopping

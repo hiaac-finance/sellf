@@ -220,8 +220,8 @@ def evaluate(env, agent, num_eps, name, seeds, eval_path, config_params, algorit
             benefit_delta = agent.benefit_deltas_dict[group_id][curr_x]
 
             next_obs, rew, done, info, gx, gx_pi0, action_pi0, next_x_pi0 = env.step(action)
-
-            dummy_buff.add(obs, action, gx, curr_x, next_x, gx_pi0, action_pi0, next_x_pi0, benefit_delta)
+            y = np.array([env.state.y]).astype(np.float32)
+            dummy_buff.add(obs, action, y, gx, curr_x, next_x, gx_pi0, action_pi0, next_x_pi0, benefit_delta)
 
             g_sum[group_id] += gx
             eval_data['tot_g_sum'][ep][t][0], eval_data['tot_g_sum'][ep][t][1] = g_sum[0], g_sum[1]

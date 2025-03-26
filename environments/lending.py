@@ -67,7 +67,7 @@ class _ApplicantSampler(core.StateUpdater):
   """Samples a new applicant."""
 
   def update(self, state, action):
-    del action  # Unused.
+    # del action  # Unused.
     params = state.params
     new_applicant = params.applicant_distribution.sample(state.rng)
     state.applicant_features = np.clip(new_applicant.features,
@@ -77,6 +77,12 @@ class _ApplicantSampler(core.StateUpdater):
     state.group_id = np.argmax(new_applicant.group)
     state.will_default = new_applicant.will_default
     state.credit_drift = new_applicant.credit_drift
+    if action is not None:
+      y = 0 if state.will_default else 1
+      y = y * action
+    else:
+      y = 0
+    state.y = y
 
 
 @attr.s(cmp=False)  # Use core.State's equality methods.
@@ -99,6 +105,7 @@ class State(core.State):
   group = attr.ib(default=None)  # type: Optional[List[int]]
   group_id = attr.ib(default=None)  # type: Optional[int]
   will_default = attr.ib(default=None)  # type: Optional[bool]
+  y = attr.ib(default=None)  # type: Optional[int]
   credit_drift = attr.ib(default=None)  # type: Optional[int]
 
 
