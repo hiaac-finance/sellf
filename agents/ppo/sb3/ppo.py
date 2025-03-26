@@ -184,6 +184,7 @@ class PPO(OnPolicyAlgorithm):
         # --- NEW ---
         self.BETA_PF = config_params.BETA_PF
         self.IMPUTATION = config_params.IMPUTATION
+        self.IPW = config_params.IPW
 
         self.config = config_params
 
@@ -390,6 +391,10 @@ class PPO(OnPolicyAlgorithm):
                             ys_pred = torch.argmax(ys_pred, dim=1).view(-1, 1).to(torch.float32)
                         # replace y_pred with y1 for imputation
                         ys[rollout_data.actions == 0] = ys_pred[rollout_data.actions == 0]
+                    elif self.IPW:
+                        # i want to estimate the potential outcome Y(a) using inverse probability weighting
+                        # Y(a) = Y(a) * I(a) / p(a)
+                        ys = ys * rollout_data.actions / self.policy.prob_loan(rollout_data.observations).view(-1,1)
 
                     
                     # ys_idxs = ys.nonzero().flatten()

@@ -27,39 +27,39 @@ class BenefitDelta:
     def _prob_c(self, c, g):
         return self.DRIFT_PROBS[g][c+1]
 
-    def _prob_y_condx(self, x, y):
+    def _prob_y_condx(self, x, y, g):
         if y == 0:
-            return 1 - self.DELAYED_IMPACT_SUCCESS_PROBS[x]
+            return 1 - self.DELAYED_IMPACT_SUCCESS_PROBS[g][x]
         else:
-            return self.DELAYED_IMPACT_SUCCESS_PROBS[x]
+            return self.DELAYED_IMPACT_SUCCESS_PROBS[g][x]
         
     def _condition_1(self, x, a, g):
         if a == 1:
-            return self._prob_y_condx(x, y=1) * self._prob_c(1, g)
+            return self._prob_y_condx(x, y=1, g = g) * self._prob_c(1, g)
         else:
             return 0.0
 
     def _condition_2(self, x, a, g):
         if a == 1:
-            return self._prob_y_condx(x, y=1) * self._prob_c(0, g)
+            return self._prob_y_condx(x, y=1, g =g) * self._prob_c(0, g)
         else:
-            return self._prob_y_condx(x, y=1) * self._prob_c(1, g) + self._prob_y_condx(x, y=0) * self._prob_c(1, g)
+            return self._prob_y_condx(x, y=1, g =g) * self._prob_c(1, g) + self._prob_y_condx(x, y=0, g =g) * self._prob_c(1, g)
 
     def _condition_3(self, x, a, g):
         if a == 1:
-            return self._prob_y_condx(x, y=1) * self._prob_c(-1, g) + self._prob_y_condx(x, y=0) * self._prob_c(1, g)
+            return self._prob_y_condx(x, y=1, g =g) * self._prob_c(-1, g) + self._prob_y_condx(x, y=0, g =g) * self._prob_c(1, g)
         else:
-            return self._prob_y_condx(x, y=1) * self._prob_c(0, g) +self._prob_y_condx(x, y=0) * self._prob_c(0, g)
+            return self._prob_y_condx(x, y=1, g =g) * self._prob_c(0, g) +self._prob_y_condx(x, y=0, g =g) * self._prob_c(0, g)
 
     def _condition_4(self, x, a, g):
         if a == 1:
-            return self._prob_y_condx(x, y=0) * self._prob_c(0, g) 
+            return self._prob_y_condx(x, y=0, g =g) * self._prob_c(0, g) 
         else:
-            return self._prob_y_condx(x, y=1) * self._prob_c(-1, g) + self._prob_y_condx(x, y=0) * self._prob_c(-1, g)
+            return self._prob_y_condx(x, y=1, g =g) * self._prob_c(-1, g) + self._prob_y_condx(x, y=0, g =g) * self._prob_c(-1, g)
 
     def _condition_5(self, x, a, g):
         if a == 1:
-            return self._prob_y_condx(x, y=0) * self._prob_c(-1, g)
+            return self._prob_y_condx(x, y=0, g =g) * self._prob_c(-1, g)
         else:
             return 0.0
 
@@ -96,7 +96,7 @@ class BenefitDelta:
             return self._condition_1(x, a, g)
         
     def _compute_benefit_delta(self, x: int, g) -> float:
-        max_x = len(self.DELAYED_IMPACT_SUCCESS_PROBS) - 1
+        max_x = len(self.DELAYED_IMPACT_SUCCESS_PROBS[0]) - 1
         min_x = 0
         x_primes = None
         if x == max_x:
@@ -120,7 +120,7 @@ class BenefitDelta:
     def gather_benefit_deltas(self) -> Dict[int, float]:
         deltas = {}
         for g in range(len(self.DRIFT_PROBS)):
-            for i in range(len(self.DELAYED_IMPACT_SUCCESS_PROBS)):
+            for i in range(len(self.DELAYED_IMPACT_SUCCESS_PROBS[0])):
                 if g not in deltas:
                     deltas[g] = {}
                 deltas[g][i] = self._compute_benefit_delta(i,g)

@@ -113,7 +113,7 @@ class OnPolicyAlgorithm(BaseAlgorithm):
 
         self.config = config_params
 
-        self.n_cscores = len(config_params.DELAYED_IMPACT_SUCCESS_PROBS)
+        self.n_cscores = len(config_params.DELAYED_IMPACT_SUCCESS_PROBS[0])
 
         self.benefit_delta_obj = BenefitDelta(config_params)
         self.benefit_deltas_dict = self.benefit_delta_obj.gather_benefit_deltas()

@@ -194,7 +194,10 @@ DELAYED_IMPACT_CLUSTER_PROBS = (
     (0.1, 0.1, 0.2, 0.3, 0.3, 0.0, 0.0),
 )
 # Likelihoods of loan repayment given credit score.
-DELAYED_IMPACT_SUCCESS_PROBS = (0.1, 0.2, 0.45, 0.6, 0.65, 0.7, 0.7)
+DELAYED_IMPACT_SUCCESS_PROBS = [
+  (0.1, 0.2, 0.45, 0.6, 0.65, 0.7, 0.7),
+  (0.1, 0.2, 0.45, 0.6, 0.65, 0.7, 0.7)
+]
 # DELAYED_IMPACT_SUCCESS_PROBS = (0.1, 0.5, 0.7, 0.8, 0.9, 0.9, 1.0)
 
 CREDIT_DRIFT_PROBS = (
@@ -227,7 +230,7 @@ def two_group_credit_clusters(
         _credit_cluster_builder(
             group_membership=tuple(group_vec),
             cluster_probs=tuple(cluster_probabilities[idx]),
-            success_probs=tuple(success_probabilities),
+            success_probs=tuple(success_probabilities[idx]),
             credit_drift_probs=tuple(credit_drift_probs[idx]))())
             # credit_drift_probs=tuple(credit_drift_probs))())
   return distributions.Mixture(components=components, weights=group_likelihoods)
