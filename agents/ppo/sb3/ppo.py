@@ -227,6 +227,7 @@ class PPO(OnPolicyAlgorithm):
         clip_fractions = []
         c_pi_theta_losses = []
         lambda_losses = []
+        imputation_losses = []
 
         dpe_list = []
         ipe_list = []
@@ -301,6 +302,18 @@ class PPO(OnPolicyAlgorithm):
                     advantages = (self.BETA_0 * advantages + self.BETA_1 * vt_term + self.BETA_2 * div_term + self.BETA_3 * long_term1 + self.BETA_4 * long_term2)  
                 # ----------------------------------------------------------------------------------------
                 # ----------------------------------------------------------------------------------------
+
+                if self.ADJUST_QUALIF:
+                    # Compute the adjusted advantage based on the disparity of qualification rates Y
+                    disp = torch.min(
+                        torch.zeros(rollout_data.deltas.shape[0]).to(self.device),
+                        -rollout_data.deltas + torch.tensor(self.OMEGA, dtype=torch.float32)
+                    )          
+                    disp = (disp - disp.min()) / (disp.max() - disp.min() + 1e-8)
+                    advantages = (self.BETA_0 * advantages + self.BETA_1 * disp)
+
+
+
                 if self.normalize_advantage:
                     advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
                     
@@ -377,26 +390,24 @@ class PPO(OnPolicyAlgorithm):
                     else:
                         policy_loss = -(ppo_loss - self.BETA_C_PI*c_pi_theta - self.BETA_LAMBDA * lambda_loss)
                 elif self.BETA_PF > 0:
-                    # --- NEW ---  
-                        # get positive labels
-                    #    if self.imputation:
-                    #         y1 = self.policy.predict_target(rollout_data.observations).view(-1,1)    
-                    # #     else:
                     ys = rollout_data.ys
-
-                    # --- test predict labels ---
+                    imputation_loss = torch.tensor([0.0])
                     if self.IMPUTATION:
-                        with torch.no_grad():
-                            ys_pred = self.policy.predict_label(rollout_data.observations)
-                            ys_pred = torch.argmax(ys_pred, dim=1).view(-1, 1).to(torch.float32)
+                        ys_probs = self.policy.predict_label(rollout_data.observations)
+                        ys_pred = torch.argmax(ys_probs, dim=1).view(-1, 1).to(torch.float32).detach()
                         # replace y_pred with y1 for imputation
+                        imputation_loss = F.cross_entropy(ys_probs, ys.to(torch.long).flatten())
                         ys[rollout_data.actions == 0] = ys_pred[rollout_data.actions == 0]
                     elif self.IPW:
-                        # i want to estimate the potential outcome Y(a) using inverse probability weighting
                         # Y(a) = Y(a) * I(a) / p(a)
                         ys = ys * rollout_data.actions / self.policy.prob_loan(rollout_data.observations).view(-1,1)
-
+                    imputation_losses.append(imputation_loss.item())
                     
+                    # EQUAL QUALIFICATION RATE  (not working)
+                    # disp = (ys[g0_idxs].mean() - ys[g1_idxs].mean())**2
+
+                    # EQUAL TRUE POSITIVE RATE (not working)
+
                     # ys_idxs = ys.nonzero().flatten()
                     # # get indexes that are from at g0_idxs and y1_idxs
                     # ys_g0_idxs = np.intersect1d(ys_idxs, g0_idxs)
@@ -412,16 +423,17 @@ class PPO(OnPolicyAlgorithm):
                     #     pa1_g1 = self.policy.prob_loan(rollout_data.observations[ys_g1_idxs]).mean()
                     # disp = (pa1_g0 - pa1_g1)**2
 
+
+                    # EQUAL ERROR RATE
                     p = self.policy.prob_loan(rollout_data.observations).view(-1,1)
                     # calculate binary cross entropy
                     xen = F.binary_cross_entropy(p, ys, reduction='none')
-                    disp = xen[g0_idxs].mean() - xen[g1_idxs].mean()
-                    disp = disp**2
+                    disp = (xen[g0_idxs].mean() - xen[g1_idxs].mean()) ** 2
                     
                     if self.KL_PEN:
-                        policy_loss = -(ppo_loss - self.BETA_PF * disp - self.static_kl_coeff*static_kl_d)
+                        policy_loss = -(ppo_loss - self.BETA_PF * disp - self.static_kl_coeff*static_kl_d - self.BETA_PF * imputation_loss)
                     else:
-                        policy_loss = -(ppo_loss - self.BETA_PF * disp)
+                        policy_loss = -(ppo_loss - self.BETA_PF * disp - self.BETA_PF * imputation_loss)
 
                     with torch.no_grad():
                         c_pi_theta = th.tensor(0.0).to(self.device)
@@ -475,17 +487,7 @@ class PPO(OnPolicyAlgorithm):
 
                 entropy_losses.append(entropy_loss.item())
 
-                # --- NEW ---
-                # predict label loss
-                # if self.imputation:
-                if self.IMPUTATION:
-                    ys_pred = self.policy.predict_label(rollout_data.observations)
-                    ys = rollout_data.ys
-                    prediction_loss = F.cross_entropy(ys_pred, ys.to(torch.long).flatten())
-                else:
-                    prediction_loss = 0
-
-                loss = policy_loss + self.ent_coef * entropy_loss + self.vf_coef * value_loss + prediction_loss
+                loss = policy_loss + self.ent_coef * entropy_loss + self.vf_coef * value_loss
                 # Calculate approximate form of reverse KL Divergence for early stopping
                 # see issue #417: https://github.com/DLR-RM/stable-baselines3/issues/417
                 # and discussion in PR #419: https://github.com/DLR-RM/stable-baselines3/pull/419
@@ -525,6 +527,7 @@ class PPO(OnPolicyAlgorithm):
         self.logger.record("train/value_loss", np.mean(value_losses))
         self.logger.record("train/approx_kl", np.mean(approx_kl_divs))
         self.logger.record("train/static_kl", np.mean(approx_static_kl_divs))
+        self.logger.record("train/imputation_loss", np.mean(imputation_losses))
         self.logger.record("train/clip_fraction", np.mean(clip_fractions))
         self.logger.record("train/loss", loss.item())
         self.logger.record("train/explained_variance", explained_var)

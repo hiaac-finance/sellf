@@ -78,6 +78,9 @@ def plot_g_by_group_over_time(tot_eval_data, path, g_type='g_sum'):
     plt.plot(timesteps, tot_g_over_time[:,1], label=f'G2', linestyle='--', alpha=0.4)
     plt.fill_between(timesteps, tot_g_over_time[:,1] - tot_g_std[:,1], tot_g_over_time[:,1] + tot_g_std[:,1], alpha=0.4)
 
+    # if steps are bigger than 1000, skip the first 250
+    if len(timesteps) > 1000:
+        plt.xlim(250, timesteps[-1])
     plt.xlabel('Timestep (t)', fontsize=15)
     if g_type == 'g_pi0_sum':
         g = "g'"

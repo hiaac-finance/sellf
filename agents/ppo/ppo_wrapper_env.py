@@ -147,6 +147,9 @@ class PPOEnvWrapper(gym.Wrapper):
     self.tn_obs = np.zeros(self.env.state.params.num_groups,)
     self.fn_obs = np.zeros(self.env.state.params.num_groups,)
     self.tpr_obs = np.zeros(self.env.state.params.num_groups,)
+    self.group_hist = np.zeros((self.ep_timesteps, self.env.state.params.num_groups))
+    self.quali_hist = np.zeros((self.ep_timesteps, self.env.state.params.num_groups))
+    self.quali_obs = np.zeros(self.env.state.params.num_groups,)
     self.acc = np.zeros(self.env.state.params.num_groups,)
     self.acc_obs = np.zeros(self.env.state.params.num_groups,)
 
@@ -213,16 +216,25 @@ class PPOEnvWrapper(gym.Wrapper):
 
     # --- NEW ---
     # UPDATE OBSERVED (and non-observed) MEASURES
+    self.group_hist[self.timestep, group_id] = 1
     if action == 1:
       # Check if individual would default
       if self.env.state.will_default:
         self.fp_obs[group_id] += 1
       else:
         self.tp_obs[group_id] += 1
+        self.quali_hist[self.timestep, group_id] = 1
       
     elif action == 0: # CONSIDER THAT ALWAYS IS DEFAULT
       self.tn_obs[group_id] += 1
 
+    t0 = max(0, self.timestep - 50)
+    self.quali_obs = np.divide(
+      self.quali_hist[t0:self.timestep+1, :].sum(axis=0),
+      self.group_hist[t0:self.timestep+1, :].sum(axis=0),
+      out=np.zeros_like(self.quali_hist[0]),
+      where=self.group_count != 0
+    )
     next_x = self.next_x_given_action(action)
 
     g_r = self.QUAL_CHANGE(curr_x, next_x)
