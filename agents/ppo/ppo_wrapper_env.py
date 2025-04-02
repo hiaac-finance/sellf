@@ -174,7 +174,7 @@ class PPOEnvWrapper(gym.Wrapper):
     if self.USE_CREDIT_DRIFT:
       curr_x = curr_x + credit_drift
     if action == 1:
-      if self.env.state.will_default:
+      if self.env.state.y == 0:
         next_x = max(0, curr_x - 1)
       else:
         next_x = min(len(self.env.state.applicant_features)-1, curr_x + 1)
@@ -203,13 +203,13 @@ class PPOEnvWrapper(gym.Wrapper):
     group_id = np.argmax(self.env.state.group)
     if action == 1:
       # Check if individual would default
-      if self.env.state.will_default:
+      if self.env.state.y == 0:
         self.fp[group_id] += 1
       else:
         self.tp[group_id] += 1
       
     elif action == 0:
-      if self.env.state.will_default:
+      if self.env.state.y == 0:
         self.tn[group_id] += 1
       else:
         self.fn[group_id] += 1
@@ -219,7 +219,7 @@ class PPOEnvWrapper(gym.Wrapper):
     self.group_hist[self.timestep, group_id] = 1
     if action == 1:
       # Check if individual would default
-      if self.env.state.will_default:
+      if self.env.state.y == 0:
         self.fp_obs[group_id] += 1
       else:
         self.tp_obs[group_id] += 1
@@ -256,7 +256,7 @@ class PPOEnvWrapper(gym.Wrapper):
     old_dist = deepcopy(self.dist)
 
     state_feats = deepcopy(self.env.state.applicant_features)
-    state_default = deepcopy(self.env.state.will_default)
+    state_default = deepcopy(self.env.state.y == 0)
 
     # Update population and history
     if len(self.population) == self.WINDOW:

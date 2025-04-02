@@ -33,9 +33,9 @@ class Applicant(object):
   """Data class to store applicant information."""
   features = attr.ib()  # type: np.ndarray
   group = attr.ib()  # type: Sequence[int]
-  will_default = attr.ib()  # type: bool
+  y = attr.ib() # type: int
+  y_obs = attr.ib() #type: int
   credit_drift = attr.ib() # type: int
-  y = attr.ib(default=0) # type: int
 
   def __attrs_post_init__(self):
     self.dim = len(self.features)
@@ -46,17 +46,19 @@ class ApplicantDistribution(distributions.Distribution):
   """Distribution to sample applicants."""
   features = attr.ib()  #  type: distributions.Distribution
   group_membership = attr.ib()  #  type: distributions.Distribution
-  will_default = attr.ib()  #  type: distributions.Distribution
+  y = attr.ib()  #  type: distributions.Distribution
   credit_drift = attr.ib() # type: distributions.Distribution
 
   def __attrs_post_init__(self):
     self.dim = self.features.dim
 
   def sample(self, rng):
+    y = self.y.sample(rng)
     return Applicant(
         features=self.features.sample(rng),
         group=self.group_membership.sample(rng),
-        will_default=self.will_default.sample(rng),
+        y=y,
+        y_obs=y,
         credit_drift=self.credit_drift.sample(rng))
 
 
@@ -94,12 +96,12 @@ def _gmm_applicant_builder(mean,
             ApplicantDistribution(
                 features=distributions.Gaussian(mean=mean, std=0.5),
                 group_membership=distributions.Constant(group),
-                will_default=distributions.Bernoulli(p=default_likelihoods[0])),
+                y=distributions.Bernoulli(p=default_likelihoods[0])),
             ApplicantDistribution(
                 features=distributions.Gaussian(
                     mean=np.array(mean) + np.array(intercluster_vec), std=0.5),
                 group_membership=distributions.Constant(group),
-                will_default=distributions.Bernoulli(p=default_likelihoods[1]))
+                y=distributions.Bernoulli(p=default_likelihoods[1]))
         ],
         weights=[0.3, 0.7])
 
@@ -177,7 +179,7 @@ def _credit_cluster_builder(group_membership,
     return ApplicantDistribution(
         features=distributions.Constant(mean=vec),
         group_membership=distributions.Constant(group_membership),
-        will_default=distributions.Bernoulli(1-success_probs[idx]),
+        y=distributions.Bernoulli(success_probs[idx]),
         credit_drift=distributions.CategoricalCreditDrift(credit_drift_probs))
 
   def _credit_clusters():
@@ -259,6 +261,9 @@ class Params(core.Params):
   interest_rate = attr.ib(default=0.30)  # type: float
   bank_starting_cash = attr.ib(default=1000.)  # type: float
   max_cash = attr.ib(default=1e20)  # type: float
+
+  # Observation setting.
+  partial_observation = attr.ib(default=False)  # type: bool
 
 
 @attr.s

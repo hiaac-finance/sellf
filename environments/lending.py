@@ -57,7 +57,7 @@ class _CashUpdater(core.StateUpdater):
     params = state.params
     if action == LoanDecision.REJECT:
       return
-    if state.will_default:
+    if state.y == 0:
       state.bank_cash -= params.loan_amount
     else:
       state.bank_cash += params.loan_amount * params.interest_rate
@@ -75,14 +75,12 @@ class _ApplicantSampler(core.StateUpdater):
                                        params.max_observation)
     state.group = new_applicant.group
     state.group_id = np.argmax(new_applicant.group)
-    state.will_default = new_applicant.will_default
+    state.y = int(new_applicant.y)
     state.credit_drift = new_applicant.credit_drift
-    if action is not None:
-      y = 0 if state.will_default else 1
-      y = y * action
+    if params.partial_observation and action is not None:
+      state.y_obs = state.y * action
     else:
-      y = 0
-    state.y = y
+      state.y_obs = state.y
 
 
 @attr.s(cmp=False)  # Use core.State's equality methods.
@@ -104,7 +102,6 @@ class State(core.State):
   applicant_features = attr.ib(default=None)  # type: Optional[np.ndarray]
   group = attr.ib(default=None)  # type: Optional[List[int]]
   group_id = attr.ib(default=None)  # type: Optional[int]
-  will_default = attr.ib(default=None)  # type: Optional[bool]
   y = attr.ib(default=None)  # type: Optional[int]
   credit_drift = attr.ib(default=None)  # type: Optional[int]
 
@@ -220,7 +217,7 @@ class BaseLendingEnv(core.FairnessEnv):
       for state, action in self.history:
         if action == 1:
           x, y = state.applicant_features
-          color = 'r' if state.will_default else 'b'
+          color = 'r' if state.y == 0 else 'b'
           plt.plot([x], [y], _MARKERS[state.group_id] + color, markersize=12)
       plt.xlabel('Feature 1')
       plt.ylabel('Feature 2')
@@ -314,7 +311,7 @@ class _CreditShift(core.StateUpdater):
     if action == LoanDecision.REJECT:
       new_cluster = cluster_id
     else:
-      new_cluster = (cluster_id - 1 if state.will_default else cluster_id + 1)
+      new_cluster = (cluster_id - 1 if state.y == 0 else cluster_id + 1)
 
     new_cluster = new_cluster + state.credit_drift
     # Prevents falling off the edges of the cluster array.
