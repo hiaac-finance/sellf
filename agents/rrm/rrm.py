@@ -9,7 +9,7 @@ import torch
 import torch as th
 
 from stable_baselines3.common.base_class import BaseAlgorithm
-from stable_baselines3.common.policies import BasePolicy, ActorCriticPolicy
+from stable_baselines3.common.policies import ActorCriticPolicy, BasePolicy
 from stable_baselines3.common.type_aliases import GymEnv, Schedule
 from stable_baselines3.common.utils import obs_as_tensor, safe_mean
 from stable_baselines3.common.vec_env import VecEnv
@@ -22,6 +22,7 @@ from config import Config
 class RolloutBufferSamples(NamedTuple):
     observations: th.Tensor
     y_obs: th.Tensor
+    group: th.Tensor
 
 class RRMRolloutBuffer(BaseBuffer):
     def __init__(
@@ -38,12 +39,14 @@ class RRMRolloutBuffer(BaseBuffer):
         self.device = device
         self.n_envs = n_envs
         self.obs_shape = observation_space.shape
+        self.num_groups = num_groups
         self.reset()
     
     
     def reset(self) -> None:
         self.observations = np.zeros((self.buffer_size, self.n_envs) + self.obs_shape, dtype=np.float32)
         self.y_obs = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
+        self.group = np.zeros((self.buffer_size, self.n_envs, self.num_groups), dtype = np.int64)
         self.pos = 0
         self.full = False
     
@@ -51,9 +54,11 @@ class RRMRolloutBuffer(BaseBuffer):
         self,
         obs: np.ndarray,
         y_obs: np.ndarray,
+        g: np.ndarray,
     ) -> None:
         self.observations[self.pos] = np.array(obs).copy()
         self.y_obs[self.pos] = np.array(y_obs).copy()
+        self.group[self.pos] = g
         self.pos += 1
         if self.pos >= self.buffer_size:
             self.full = True
@@ -76,6 +81,7 @@ class RRMRolloutBuffer(BaseBuffer):
         data = (
             self.observations[batch_inds],
             self.y_obs[batch_inds],
+            self.group[batch_inds],
         )
         return RolloutBufferSamples(*tuple(map(self.to_torch, data)))
 
@@ -85,12 +91,13 @@ class RRM(BaseAlgorithm):
     """
     def __init__(
         self,
-        policy: Union[str, Type[BasePolicy]],
+        policy: Union[str, Type[ActorCriticPolicy]],
         env: Union[GymEnv, str],
         learning_rate: Union[float, Schedule],
         n_steps: int,
         batch_size: int = 64,
-        policy_base: Type[BasePolicy] = ActorPolicy,
+        beta: float = 0.,
+        policy_base: Type[BasePolicy] = ActorCriticPolicy,
         tensorboard_log: Optional[str] = None,
         create_eval_env: bool = False,
         monitor_wrapper: bool = True,
@@ -119,6 +126,7 @@ class RRM(BaseAlgorithm):
         self.n_steps = n_steps
         self.n_epochs = config_params.N_EPOCHS
         self.batch_size = batch_size
+        self.beta = beta
         self.policy_kwargs = config_params.POLICY_KWARGS
         self._setup_model()
         
@@ -196,7 +204,8 @@ class RRM(BaseAlgorithm):
             y_obs = np.array([
                 env.get_attr("state")[0].y_obs
             ]).astype(np.float32)
-            rollout_buffer.add(self._last_obs, y_obs)
+            g = np.array(env.get_attr("state")[0].group).astype(np.int32)
+            rollout_buffer.add(self._last_obs, y_obs, g)
             # ----------------------------------------------------------------
             self._last_obs = new_obs
 
@@ -213,20 +222,20 @@ class RRM(BaseAlgorithm):
         self._update_learning_rate(self.policy.optimizer)
         # Compute current clip range
 
- 
-        #g_0_idx = self.rollout_buffer.g_loc_start
-        #g_1_idx = g_0_idx + 1
-
-        criterion = torch.nn.BCELoss()
+        criterion = torch.nn.CrossEntropyLoss(reduction="none")
 
         for epoch in range(self.n_epochs):
 
             # Do a complete pass on the rollout buffer
             for rollout_data in self.rollout_buffer.get(self.batch_size):
+                g0_idx = rollout_data.group[:, :, 0]
+                g1_idx = rollout_data.group[:, :, 1]
                 pred = self.policy(rollout_data.observations)
-                pred = pred.to(torch.float32).view(-1)
-                y_obs = rollout_data.y_obs.view(-1)
+                y_obs = rollout_data.y_obs.view(-1).long()
                 loss = criterion(pred, y_obs)
+                loss_g0 = loss[g0_idx].mean()
+                loss_g1 = loss[g1_idx].mean()
+                loss = loss.mean() + self.beta * (loss_g0 - loss_g1)**2
 
                 # Optimization step
                 self.policy.optimizer.zero_grad()
@@ -236,7 +245,6 @@ class RRM(BaseAlgorithm):
                 #th.nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
                 self.policy.optimizer.step()
 
-                print(loss.item())
 
                 #if torch.isnan(self.policy.mlp_extractor.shared_net[0].weight).any():
                 #    import pdb; pdb.set_trace()

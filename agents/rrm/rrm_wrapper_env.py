@@ -9,24 +9,45 @@ from environments.distributions import Bernoulli
 
 
 
-class RPMEnvWrapper(gym.Wrapper):
-  def __init__(self,
-               env,
-               reward_fn,
-               config_params=None,
-               is_eval=False,
+class RRMEnvWrapper(gym.Wrapper):
+  def __init__(
+      self,
+      env,
+      reward_fn,
+      is_eval=False,
+      omega: float = 0.0,
+      dist_test: bool = True,
+      mu: str = "error",
+      window: int = 50,
+      pop_window: int = 300,
+      ep_timesteps: int = 500,
     ):
-    super(RPMEnvWrapper, self).__init__(env)
+    super(RRMEnvWrapper, self).__init__(env)
 
-    self.DRIFT_PROBS = config_params.DRIFT_PROBS
-    self.USE_CREDIT_DRIFT = config_params.USE_CREDIT_DRIFT
+    self.omega = omega
+    self.mu = mu
+    self.window = window
+    self.pop_window = pop_window
+    self.ep_timesteps = ep_timesteps
 
-    self.pi_0 = Bernoulli(config_params.PI0_PROB_A1)
+    self.y_hist = [
+      deque(maxlen = self.window),
+      deque(maxlen = self.window),
+    ]
+    self.y_obs_hist = [
+      deque(maxlen = self.window),
+      deque(maxlen = self.window),
+    ]
+    self.a_hist = [
+      deque(maxlen = self.window),
+      deque(maxlen = self.window),
+    ]
+    self.timestep = 0
+    self.old_bank_cash = 0
+    self.population= deque(maxlen=self.pop_window)
 
-    self.DIST_EST = config_params.DIST_EST
-
-    
-    if self.DIST_EST:
+    self.dist_est = dist_test
+    if self.dist_est:
         self.observation_space = spaces.Box(
         low=np.inf,
         high=np.inf,
@@ -39,41 +60,20 @@ class RPMEnvWrapper(gym.Wrapper):
         shape=(env.observation_space['applicant_features'].shape[0] + env.state.params.num_groups,),
         # -------------------------------------------------------------
       )
-
     self.action_space = spaces.Discrete(n=2)
 
     self.env = env
-    self.reward_fn = reward_fn(omega = config_params.OMEGA,)
+    self.reward_fn = reward_fn(omega = omega)
 
-    self.timestep = 0
 
-    self.tp = np.zeros(self.env.state.params.num_groups,)
-    self.fp = np.zeros(self.env.state.params.num_groups,)
-    self.tn = np.zeros(self.env.state.params.num_groups,)
-    self.fn = np.zeros(self.env.state.params.num_groups,)
-    self.tpr = np.zeros(self.env.state.params.num_groups,)
-    self.delta = np.zeros(1, )
-    self.old_bank_cash = 0
-
-    
-    if is_eval:
-      self.ep_timesteps = config_params.EVAL_EP_TIMESTEPS
-    else:
-      self.ep_timesteps = config_params.EP_TIMESTEPS
-      
-
-    self.QUAL_CHANGE = config_params.QUAL_CHANGE
-    self.WINDOW = config_params.WINDOW
-    self.ONLY_OBSERVATION = config_params.ONLY_OBSERVATION
-
-  def process_observation(self, obs):
+  def process_observation(self, obs) -> np.ndarray:
     credit_score = obs['applicant_features']
     group = obs['group']
     hist0 = self.history[0]
     hist1 = self.history[1]
     norm = sum(hist0 + hist1) + 1.
 
-    if self.DIST_EST:
+    if self.dist_est:
       return np.concatenate(
         (credit_score,
         group,
@@ -90,88 +90,68 @@ class RPMEnvWrapper(gym.Wrapper):
         axis=0
       )
 
-  def reset(self):
+  def reset(self) -> np.ndarray:
+    self.y_hist = [
+      deque(maxlen = self.window),
+      deque(maxlen = self.window),
+    ]
+    self.y_obs_hist = [
+      deque(maxlen = self.window),
+      deque(maxlen = self.window),
+    ]
+    self.a_hist = [
+      deque(maxlen = self.window),
+      deque(maxlen = self.window),
+    ]
     self.timestep = 0
-    self.tp = np.zeros(self.env.state.params.num_groups,)
-    self.fp = np.zeros(self.env.state.params.num_groups,)
-    self.tn = np.zeros(self.env.state.params.num_groups,)
-    self.fn = np.zeros(self.env.state.params.num_groups,)
-    self.tpr = np.zeros(self.env.state.params.num_groups,)
-    self.delta = np.zeros(1, )
     self.old_bank_cash = 0
-    self.delta_delta = 0
-
-    # ----------------------------------- add history and population ----------------------------
+    self.population= deque(maxlen=self.pop_window)
     self.history = np.zeros((self.env.state.params.num_groups, self.env.observation_space['applicant_features'].shape[0]))
-    self.population = deque(maxlen=self.WINDOW)
-    self.dist = 0
-    self.dist_dist = 0
-    # --------------------------------------------------------------------------------------------
 
     return self.process_observation(self.env.reset())
   
 
   def step(self, action):
-    old_delta = self.delta
+    group_id = int(np.argmax(self.env.state.group))
+    self.y_hist[group_id].append(self.env.state.y)
+    self.y_obs_hist[group_id].append(self.env.state.y_obs)
+    self.a_hist[group_id].append(action)
 
-    curr_x = np.argmax(self.env.state.applicant_features)
-    # Update instance variables before we step the environment
-    group_id = np.argmax(self.env.state.group)
-    if action == 1:
-      # Check if individual would default
-      if self.env.state.y == 0:
-        self.fp[group_id] += 1
-      else:
-        self.tp[group_id] += 1
-      
-    elif action == 0:
-      if self.env.state.y == 0:
-        self.tn[group_id] += 1
-      else:
-        self.fn[group_id] += 1
+    # calculate mu and delta
+    if self.mu == "error":
+      self.mu = [
+        np.mean(np.array(self.y_hist[0]) != np.array(self.a_hist[0])),
+        np.mean(np.array(self.y_hist[1]) != np.array(self.a_hist[1])),
+      ]
+      self.delta = np.abs(self.mu[0] - self.mu[1])
 
-
+      self.mu_obs = [
+        np.mean(np.array(self.y_obs_hist[0]) != np.array(self.a_hist[0])),
+        np.mean(np.array(self.y_obs_hist[1]) != np.array(self.a_hist[1])),
+      ]
+      self.delta_obs = np.abs(self.mu_obs[0] - self.mu_obs[1])
     
     self.old_bank_cash = self.env.state.bank_cash
 
-    # Update delta terms (for A-PPO)
-    self.delta = np.abs(self.tpr[0] - self.tpr[1])
-    self.delta_delta = self.delta - old_delta
-
-    # ------------------- update population and distribution -----------------
-
-    state_feats = deepcopy(self.env.state.applicant_features)
-    state_default = deepcopy(self.env.state.y == 0)
-
-    # Update population and history
-    if len(self.population) == self.WINDOW:
+    if len(self.population) == self.pop_window: #if population is full, remove the oldest
       old_id, old_feats, old_default, old_action = self.population.popleft()
       self.history[old_id] -= old_feats
 
-      if old_action == 1:
-        if old_default:
-          self.fp[old_id] -= 1
-        else:
-          self.tp[old_id] -= 1
-      elif old_action == 0:
-        if old_default:
-          self.tn[old_id] -= 1
-        else:
-          self.fn[old_id] -= 1
-
-    self.population.append((group_id, state_feats, state_default, action))
-
+    state_feats = deepcopy(self.env.state.applicant_features)
+    state_default = deepcopy(self.env.state.y == 0)
     self.history[group_id] = self.history[group_id] + state_feats
+    self.population.append((group_id, state_feats, state_default, action))
 
     # -------------------------------------------------------------------------
     obs, _, done, info = self.env.step(action)
 
-    #r = self.reward_fn(old_bank_cash=self.old_bank_cash,
-    #                   bank_cash=self.env.state.bank_cash,
-    #                   tpr=self.tpr_obs if self.ONLY_OBSERVATION else self.tpr,
-    #                   zeta0=self.ZETA_0,
-    #                   zeta1=self.ZETA_1)
-    r = 0
+    r = self.reward_fn(
+        old_bank_cash=self.old_bank_cash,
+        bank_cash=self.env.state.bank_cash,
+        tpr=self.mu,
+        zeta0=1,
+        zeta1=0. # make a parameter
+    )
 
     self.timestep += 1
     if self.timestep >= self.ep_timesteps:
