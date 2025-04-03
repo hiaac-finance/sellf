@@ -23,7 +23,7 @@ class RolloutBufferSamples(NamedTuple):
     observations: th.Tensor
     y_obs: th.Tensor
 
-class RPMRolloutBuffer(BaseBuffer):
+class RRMRolloutBuffer(BaseBuffer):
     def __init__(
         self,
         buffer_size: int,
@@ -33,7 +33,7 @@ class RPMRolloutBuffer(BaseBuffer):
         n_envs: int = 1,
         num_groups: int = 2,
     ):
-        super(RPMRolloutBuffer, self).__init__(buffer_size, observation_space, action_space, device, n_envs=n_envs)
+        super(RRMRolloutBuffer, self).__init__(buffer_size, observation_space, action_space, device, n_envs=n_envs)
         self.buffer_size = buffer_size
         self.device = device
         self.n_envs = n_envs
@@ -79,7 +79,7 @@ class RPMRolloutBuffer(BaseBuffer):
         )
         return RolloutBufferSamples(*tuple(map(self.to_torch, data)))
 
-class RPM(BaseAlgorithm):
+class RRM(BaseAlgorithm):
     """
     Class that implements Repeated Risk Minimization
     """
@@ -102,7 +102,7 @@ class RPM(BaseAlgorithm):
         supported_action_spaces: Optional[Tuple[gym.spaces.Space, ...]] = None,
         config_params: Type[Config] = None,
     ):
-        super(RPM, self).__init__(
+        super(RRM, self).__init__(
             policy=policy,
             env=env,
             policy_base=policy_base,
@@ -127,7 +127,7 @@ class RPM(BaseAlgorithm):
         self._setup_lr_schedule()
         self.set_random_seed(self.seed)
 
-        self.rollout_buffer = RPMRolloutBuffer(
+        self.rollout_buffer = RRMRolloutBuffer(
             buffer_size=self.n_steps,
             observation_space=self.observation_space,
             action_space=self.action_space,
@@ -148,7 +148,7 @@ class RPM(BaseAlgorithm):
 
     def collect_rollouts(self,
         env: VecEnv,
-        rollout_buffer: RPMRolloutBuffer,
+        rollout_buffer: RRMRolloutBuffer,
         n_rollout_steps: int,
     ) -> bool:
         assert self._last_obs is not None, "No previous observation was provided"
@@ -252,7 +252,7 @@ class RPM(BaseAlgorithm):
     def learn(
         self,
         total_timesteps: int,
-    ) -> "RPM":
+    ) -> "RRM":
         self._setup_learn(
             total_timesteps=total_timesteps, eval_env=None,
         )
