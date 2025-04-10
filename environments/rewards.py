@@ -138,10 +138,10 @@ class LendingReward(core.RewardFn):
 
     bank_cash_term = zeta0 * (bank_cash - old_bank_cash)
 
-    delta_term = 0 \
-      if self.calc_delta(tpr) < self.OMEGA \
-      else zeta1 * self.calc_delta(tpr)
-
+    #delta_term = 0 \
+    #  if self.calc_delta(tpr) < self.OMEGA \
+    #  else zeta1 * self.calc_delta(tpr)
+    delta_term = 0
     tot_rew = bank_cash_term - delta_term
 
     self.rew_info = {

@@ -93,9 +93,10 @@ class RRM(BaseAlgorithm):
         self,
         policy: Union[str, Type[ActorCriticPolicy]],
         env: Union[GymEnv, str],
-        learning_rate: Union[float, Schedule],
-        n_steps: int,
+        learning_rate: Union[float, Schedule] = 1e-4,
+        n_steps: int = 1024,
         batch_size: int = 64,
+        n_epochs: int = 10,
         beta: float = 0.,
         policy_base: Type[BasePolicy] = ActorCriticPolicy,
         tensorboard_log: Optional[str] = None,
@@ -107,7 +108,7 @@ class RRM(BaseAlgorithm):
         device: Union[th.device, str] = "auto",
         _init_setup_model: bool = True,
         supported_action_spaces: Optional[Tuple[gym.spaces.Space, ...]] = None,
-        config_params: Type[Config] = None,
+        **kwargs,
     ):
         super(RRM, self).__init__(
             policy=policy,
@@ -124,25 +125,28 @@ class RRM(BaseAlgorithm):
             supported_action_spaces=supported_action_spaces,
         )
         self.n_steps = n_steps
-        self.n_epochs = config_params.N_EPOCHS
+        self.n_epochs = n_epochs
         self.batch_size = batch_size
         self.beta = beta
-        self.policy_kwargs = config_params.POLICY_KWARGS
-        self._setup_model()
+        self.policy_kwargs = {} if policy_kwargs is None else policy_kwargs
+        if _init_setup_model:
+            self._setup_model()
         
 
     def _setup_model(self) -> None:
         self._setup_lr_schedule()
         self.set_random_seed(self.seed)
-
-        self.rollout_buffer = RRMRolloutBuffer(
-            buffer_size=self.n_steps,
-            observation_space=self.observation_space,
-            action_space=self.action_space,
-            device=self.device,
-            n_envs=self.env.num_envs,
-            num_groups=2,
-        )
+        if self.env is None:
+            self.rollout_buffer = None
+        else:
+            self.rollout_buffer = RRMRolloutBuffer(
+                buffer_size=self.n_steps,
+                observation_space=self.observation_space,
+                action_space=self.action_space,
+                device=self.device,
+                n_envs=self.env.num_envs,
+                num_groups=2,
+            )
 
         
         self.policy = ActorPolicy(  # pytype:disable=not-instantiable
@@ -226,6 +230,7 @@ class RRM(BaseAlgorithm):
 
         for epoch in range(self.n_epochs):
 
+            actions=[]
             # Do a complete pass on the rollout buffer
             for rollout_data in self.rollout_buffer.get(self.batch_size):
                 g0_idx = rollout_data.group[:, :, 0]
@@ -241,15 +246,23 @@ class RRM(BaseAlgorithm):
                 self.policy.optimizer.zero_grad()
                 loss.backward()
 
+
                 ## Clip grad norm
                 #th.nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
                 self.policy.optimizer.step()
 
+                actions.append(
+                    pred.argmax(dim=1).view(-1, 1).detach().cpu().numpy()
+                )
 
                 #if torch.isnan(self.policy.mlp_extractor.shared_net[0].weight).any():
                 #    import pdb; pdb.set_trace()
 
+        actions = np.concatenate(actions, axis=0)
 
+        self.logger.record("train/loss", loss.item())
+        self.logger.record("train/actions", actions.mean())
+        self.logger.dump()
         self._n_updates += self.n_epochs
 
         #self.logger.record("train/loss", loss.item())
@@ -276,8 +289,7 @@ class RRM(BaseAlgorithm):
         return self
 
 
-    
+    def _get_torch_save_params(self) -> Tuple[List[str], List[str], List[str]]:
+        state_dicts = ["policy", "policy.optimizer"]
 
-
-    
-    
+        return state_dicts, []

@@ -14,10 +14,9 @@ class RRMEnvWrapper(gym.Wrapper):
       self,
       env,
       reward_fn,
-      is_eval=False,
       omega: float = 0.0,
       dist_test: bool = True,
-      mu: str = "error",
+      mu_type: str = "error",
       window: int = 50,
       pop_window: int = 300,
       ep_timesteps: int = 500,
@@ -25,7 +24,7 @@ class RRMEnvWrapper(gym.Wrapper):
     super(RRMEnvWrapper, self).__init__(env)
 
     self.omega = omega
-    self.mu = mu
+    self.mu_type = mu_type
     self.window = window
     self.pop_window = pop_window
     self.ep_timesteps = ep_timesteps
@@ -107,6 +106,10 @@ class RRMEnvWrapper(gym.Wrapper):
     self.old_bank_cash = 0
     self.population= deque(maxlen=self.pop_window)
     self.history = np.zeros((self.env.state.params.num_groups, self.env.observation_space['applicant_features'].shape[0]))
+    self.mu = np.zeros(self.env.state.params.num_groups)
+    self.mu_obs = np.zeros(self.env.state.params.num_groups)
+    self.delta = 0
+    self.delta_obs = 0
 
     return self.process_observation(self.env.reset())
   
@@ -118,16 +121,16 @@ class RRMEnvWrapper(gym.Wrapper):
     self.a_hist[group_id].append(action)
 
     # calculate mu and delta
-    if self.mu == "error":
+    if self.mu_type == "error":
       self.mu = [
-        np.mean(np.array(self.y_hist[0]) != np.array(self.a_hist[0])),
-        np.mean(np.array(self.y_hist[1]) != np.array(self.a_hist[1])),
+        np.mean(np.array(self.y_hist[0]) != np.array(self.a_hist[0])) if len(self.y_hist[0]) > 0 else 1,
+        np.mean(np.array(self.y_hist[1]) != np.array(self.a_hist[1])) if len(self.y_hist[1]) > 0 else 1,
       ]
       self.delta = np.abs(self.mu[0] - self.mu[1])
 
       self.mu_obs = [
-        np.mean(np.array(self.y_obs_hist[0]) != np.array(self.a_hist[0])),
-        np.mean(np.array(self.y_obs_hist[1]) != np.array(self.a_hist[1])),
+        np.mean(np.array(self.y_obs_hist[0]) != np.array(self.a_hist[0])) if len(self.y_obs_hist[0]) > 0 else 1,
+        np.mean(np.array(self.y_obs_hist[1]) != np.array(self.a_hist[1])) if len(self.y_obs_hist[1]) > 0 else 1,
       ]
       self.delta_obs = np.abs(self.mu_obs[0] - self.mu_obs[1])
     
