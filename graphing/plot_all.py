@@ -502,3 +502,60 @@ def plot_lambda_dpe(df_list, png_name='lambda_dpe_plot.png', save_path=None, cma
         print(f"Saving plot to {save_path}")
         plt.savefig(os.path.join(save_path, png_name))
         plt.close()
+
+
+def complete_plot_reward_mu(df, save_path = None):
+    df = df.groupby("t").agg({
+        "bank_cash" : ["mean", "std"],
+        "mu0" : ["mean", "std"],
+        "mu1" : ["mean", "std"],
+        "mu0_obs" : ["mean", "std"],
+        "mu1_obs" : ["mean", "std"],
+    }).reset_index()
+
+    fig, axs = plt.subplots(nrows = 1, ncols = 3, figsize = (12, 4))
+
+
+
+    axs[0].fill_between(
+        df["t"],
+        df["bank_cash"]["mean"] - df["bank_cash"]["std"],
+        df["bank_cash"]["mean"] + df["bank_cash"]["std"],
+        alpha=0.2,
+    )
+    axs[0].plot(
+        df["t"],
+        df["bank_cash"]["mean"],
+    )
+    axs[0].set_ylim(9900, 10500)
+
+
+    for i, suffix in enumerate(["", "_obs"]):
+        for g in range(2):
+            col = f"mu{g}{suffix}"
+            axs[i+1].fill_between(
+                df["t"],
+                df[col]["mean"] - df[col]["std"],
+                df[col]["mean"] + df[col]["std"],
+                alpha=0.2,
+            )
+
+            axs[i+1].plot(
+                df["t"],
+                df[col]["mean"],
+            )
+
+
+    axs[0].set_title("Bank Cash")
+    axs[1].set_title("$\mu$")
+    axs[2].set_title("$\\tilde \mu$")
+    for i in range(3):
+        axs[i].set_xlabel("Timesteps")
+
+
+    if save_path is None:
+        plt.show()
+    else:
+        plt.savefig(os.path.join(save_path, 'reward_mu.png'))
+        plt.close()
+
