@@ -513,6 +513,7 @@ def complete_plot_reward_mu(df, save_path = None):
         "mu1_obs" : ["mean", "std"],
     }).reset_index()
 
+    t_max = df["t"].max()
     fig, axs = plt.subplots(nrows = 1, ncols = 3, figsize = (12, 4))
 
 
@@ -552,6 +553,8 @@ def complete_plot_reward_mu(df, save_path = None):
     for i in range(3):
         axs[i].set_xlabel("Timesteps")
 
+    for i in range(1, 3):
+        axs[i].set_xlim(0.2*t_max, t_max)
 
     if save_path is None:
         plt.show()

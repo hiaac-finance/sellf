@@ -117,13 +117,13 @@ class OnPolicyAlgorithm(BaseAlgorithm):
         self.set_random_seed(self.seed)
 
 
-        if self.env is None:
-            print('No env set, loading delayed impact cluster probs from config...')
-            init_dists = self.config.DELAYED_IMPACT_CLUSTER_PROBS
-        else:
-            init_state = self.env.get_attr('state',0)[0]
-            init_dists = [dist.weights for dist in init_state.params.applicant_distribution.components]
-            init_dists = tuple(init_dists)
+        # if self.env is None:
+        #     print('No env set, loading delayed impact cluster probs from config...')
+        #     init_dists = self.config.DELAYED_IMPACT_CLUSTER_PROBS
+        # else:
+        #     init_state = self.env.get_attr('state',0)[0]
+        #     init_dists = [dist.weights for dist in init_state.params.applicant_distribution.components]
+        #     init_dists = tuple(init_dists)
 
         self.rollout_buffer = RolloutBuffer(
             self.n_steps,

@@ -98,6 +98,7 @@ class PPO(OnPolicyAlgorithm):
             seed: Optional[int] = None,
             device: Union[th.device, str] = "auto",
             _init_setup_model: bool = True,
+            **kwargs: Any,
             # # --------------------------------------------------------------------------------------------
     ):
         super(PPO, self).__init__(
@@ -225,15 +226,15 @@ class PPO(OnPolicyAlgorithm):
                     
 
                 # q_log_p contains the log likelihood of the actions sampled in the trajectory
-                ratio = th.exp(log_prob - rollout_data.old_log_prob)
+                ratio = th.exp(log_prob - rollout_data.old_log_probs)
 
                 # Compute the KL divergence between the old and new policies, q_log_prob has log likelihoods for both actions
                 if self.kl_pen:
-                    static_kl_d = (th.exp(rollout_data.log_probs)*(rollout_data.log_probs - log_prob)).sum(axis=1).mean()
+                    static_kl_d = (th.exp(rollout_data.old_log_probs)*(rollout_data.old_log_probs - log_prob)).sum(axis=1).mean()
                 else:
                     # for logging purposes only
                     with th.no_grad():
-                        static_kl_d = (th.exp(rollout_data.log_probs)*(rollout_data.log_probs - log_prob.detach())).sum(axis=1).mean()
+                        static_kl_d = (th.exp(rollout_data.old_log_probs)*(rollout_data.old_log_probs - log_prob.detach())).sum(axis=1).mean()
 
                 # clipped surrogate loss
                 policy_loss_1 = advantages * ratio
@@ -262,7 +263,7 @@ class PPO(OnPolicyAlgorithm):
                     )
 
                 # Value loss using the TD(gae_lambda) target
-                value_loss = F.mse_loss(rollout_data.returns, values_pred)
+                value_loss = F.mse_loss(rollout_data.returns, values_pred.view(-1, 1))
                 value_losses.append(value_loss.item())
 
                 # Entropy loss favor exploration
@@ -280,7 +281,7 @@ class PPO(OnPolicyAlgorithm):
                 # and discussion in PR #419: https://github.com/DLR-RM/stable-baselines3/pull/419
                 # and Schulman blog: http://joschu.net/blog/kl-approx.html
                 with th.no_grad():
-                    log_ratio = log_prob - rollout_data.old_log_prob
+                    log_ratio = log_prob - rollout_data.old_log_probs
                     approx_kl_div = th.mean((th.exp(log_ratio) - 1) - log_ratio).cpu().numpy()
                     approx_kl_divs.append(approx_kl_div)
 

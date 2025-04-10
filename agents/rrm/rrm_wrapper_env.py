@@ -17,6 +17,7 @@ class RRMEnvWrapper(gym.Wrapper):
       omega: float = 0.0,
       dist_test: bool = True,
       mu_type: str = "error",
+      penalize_mu: bool = False,
       window: int = 50,
       pop_window: int = 300,
       ep_timesteps: int = 500,
@@ -25,6 +26,7 @@ class RRMEnvWrapper(gym.Wrapper):
 
     self.omega = omega
     self.mu_type = mu_type
+    self.penalize_mu = penalize_mu
     self.window = window
     self.pop_window = pop_window
     self.ep_timesteps = ep_timesteps
@@ -151,9 +153,9 @@ class RRMEnvWrapper(gym.Wrapper):
     r = self.reward_fn(
         old_bank_cash=self.old_bank_cash,
         bank_cash=self.env.state.bank_cash,
-        tpr=self.mu,
-        zeta0=1,
-        zeta1=0. # make a parameter
+        mu=self.mu,
+        zeta0=1 if not self.penalize_mu else 1- self.timestep/self.ep_timesteps,
+        zeta1=0 if not self.penalize_mu else self.timestep/self.ep_timesteps,
     )
 
     self.timestep += 1

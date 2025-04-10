@@ -225,8 +225,9 @@ class RRM(BaseAlgorithm):
         # Update optimizer learning rate
         self._update_learning_rate(self.policy.optimizer)
         # Compute current clip range
-
-        criterion = torch.nn.CrossEntropyLoss(reduction="none")
+        y_obs = self.rollout_buffer.y_obs.reshape(-1)
+        weight = torch.Tensor([5., 1.]).to(self.device) # hard coded
+        criterion = torch.nn.CrossEntropyLoss(reduction="none", weight=weight)
 
         for epoch in range(self.n_epochs):
 
@@ -240,7 +241,7 @@ class RRM(BaseAlgorithm):
                 loss = criterion(pred, y_obs)
                 loss_g0 = loss[g0_idx].mean()
                 loss_g1 = loss[g1_idx].mean()
-                loss = loss.mean() + self.beta * (loss_g0 - loss_g1)**2
+                loss = loss.mean() #+ self.beta * (loss_g0 - loss_g1)**2
 
                 # Optimization step
                 self.policy.optimizer.zero_grad()

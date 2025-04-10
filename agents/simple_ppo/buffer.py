@@ -11,9 +11,9 @@ class RolloutBufferSamples(NamedTuple):
     observations: th.Tensor
     actions: th.Tensor
     y_obs: th.Tensor
-    group: th.Tensor
+    groups: th.Tensor
     old_values: th.Tensor
-    old_log_prob: th.Tensor
+    old_log_probs: th.Tensor
     advantages: th.Tensor
     returns: th.Tensor
 
@@ -46,7 +46,7 @@ class RolloutBuffer(BaseBuffer):
         self.observations = np.zeros((self.buffer_size, self.n_envs) + self.obs_shape, dtype=np.float32)
         self.actions = np.zeros((self.buffer_size, self.n_envs, self.action_dim), dtype=np.float32)
         self.y_obs = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
-        self.group = np.zeros((self.buffer_size, self.n_envs, self.num_groups), dtype = np.int64)
+        self.groups = np.zeros((self.buffer_size, self.n_envs, self.num_groups), dtype = np.int64)
         self.values = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
         self.log_probs = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
         self.advantages = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
@@ -75,7 +75,7 @@ class RolloutBuffer(BaseBuffer):
         self.observations[self.pos] = np.array(obs).copy()
         self.actions[self.pos] = np.array(action).copy()
         self.y_obs[self.pos] = np.array(y_obs).copy()
-        self.group[self.pos] = g
+        self.groups[self.pos] = g
         self.values[self.pos] = value.clone().cpu().numpy().flatten()
         self.log_probs[self.pos] = log_prob.clone().cpu().numpy()
         self.rewards[self.pos] = np.array(reward).copy()
@@ -96,7 +96,7 @@ class RolloutBuffer(BaseBuffer):
             _tensor_names = [
                 "observations",
                 "actions",
-                "y_obss",
+                "y_obs",
                 "groups",
                 "values",
                 "log_probs",
@@ -121,7 +121,7 @@ class RolloutBuffer(BaseBuffer):
             self.observations[batch_inds],
             self.actions[batch_inds],
             self.y_obs[batch_inds],
-            self.group[batch_inds],
+            self.groups[batch_inds],
             self.values[batch_inds],
             self.log_probs[batch_inds],
             self.advantages[batch_inds],
