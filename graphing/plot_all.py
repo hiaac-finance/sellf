@@ -511,6 +511,8 @@ def complete_plot_reward_mu(df, save_path = None):
         "mu1" : ["mean", "std"],
         "mu0_obs" : ["mean", "std"],
         "mu1_obs" : ["mean", "std"],
+        "delta" : ["mean", "std"],
+        "delta_obs" : ["mean", "std"],
     }).reset_index()
 
     t_max = df["t"].max()
@@ -528,23 +530,33 @@ def complete_plot_reward_mu(df, save_path = None):
         df["t"],
         df["bank_cash"]["mean"],
     )
-    axs[0].set_ylim(9900, 10500)
 
 
     for i, suffix in enumerate(["", "_obs"]):
-        for g in range(2):
-            col = f"mu{g}{suffix}"
-            axs[i+1].fill_between(
-                df["t"],
-                df[col]["mean"] - df[col]["std"],
-                df[col]["mean"] + df[col]["std"],
-                alpha=0.2,
-            )
+        col = f"delta{suffix}"
+        axs[i+1].fill_between(
+            df["t"],
+            df[col]["mean"] - df[col]["std"],
+            df[col]["mean"] + df[col]["std"],
+            alpha=0.2,
+        )
+        axs[i+1].plot(
+            df["t"],
+            df[col]["mean"],
+        )
 
-            axs[i+1].plot(
-                df["t"],
-                df[col]["mean"],
-            )
+        # for g in range(2):
+        #     col = f"mu{g}{suffix}"
+        #     axs[i+1].fill_between(
+        #         df["t"],
+        #         df[col]["mean"] - df[col]["std"],
+        #         df[col]["mean"] + df[col]["std"],
+        #         alpha=0.2,
+        #     )
+        #     axs[i+1].plot(
+        #         df["t"],
+        #         df[col]["mean"],
+        #     )
 
 
     axs[0].set_title("Bank Cash")

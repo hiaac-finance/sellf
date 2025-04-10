@@ -106,48 +106,6 @@ def validate_config(parameters):
     return validated_config
 
 
-default_config = {
-    "general" : {
-        "seed" : 2025,
-        "algorithm" : "ppo",
-        "exp_dir": "./results/ppo",
-        "save_dir": "./results/ppo/models",
-        "eval_dir" : "./results/ppo/evaluation",
-        "n_seeds" : 1,
-    },
-    "environment" : {
-        "partial_observation" : False,
-        "cluster_probabilities" : [
-            [0.0, 0.0, 0.05, 0.05, 0.05, 0.05, 0.1, 0.1, 0.15, 0.15, 0.15, 0.15, 0.0, 0.0],
-            [0.05, 0.05, 0.05, 0.05, 0.1, 0.1, 0.15, 0.15, 0.15, 0.15, 0.0, 0.0, 0.0, 0.0],
-        ],
-        "group_likelihoods" : [0.5, 0.5],
-        "success_probabilities" : [
-            [0.773, 0.804, 0.833, 0.857, 0.879, 0.898, 0.914, 0.928, 0.939, 0.949, 0.958, 0.965, 0.970, 0.975],
-            [0.773, 0.804, 0.833, 0.857, 0.879, 0.898, 0.914, 0.928, 0.939, 0.949, 0.958, 0.965, 0.970, 0.975],
-        ],
-        "credit_drift_probs" : [[0.1, 0.8, 0.1], [0.1, 0.8, 0.1]],
-        "bank_starting_cash" : 10_000,
-        "interest_rate" : .1,
-        "cluster_shift_increment" : 0.01,
-        "ep_timesteps" : 500,
-        "omega" : 0.,
-    },
-    "algorithm" : {
-        "policy": "MlpPolicy",
-        "learning_rate": 1e-4,
-        "n_steps": 500,
-        "batch_size" : 64,
-        "n_epochs": 1,
-        "train_timesteps" : 50_000,
-        "eval_timesteps" : 10_000,
-    },
-    "policy" : {
-        "activation_fn" : "ReLU",
-        "net_arch" : [256, 256, dict(vf=[256, 128], pi=[256, 128])],
-    }
-}
-
 def save_code(save_dir):
     print('Saving code...')
     code_dir = './'
@@ -199,7 +157,7 @@ def train_multi(
         env = DelayedImpactEnv(env_params)
         seed = seeds[i]
         env.seed(seed)
-        env = RRMEnvWrapper(env, reward_fn = LendingReward, omega=config.environment.omega, dist_test=False,)
+        env = RRMEnvWrapper(env, reward_fn = LendingReward, omega=config.environment.omega, dist_test=True,)
         env = Monitor(env)
         env = DummyVecEnv([lambda: env])
         
@@ -263,6 +221,7 @@ def evaluate(env, agent, num_eps, seeds, eval_path, config):
         env.seed(seeds[ep])
 
         obs = env.reset()
+        bank_starting_cash = env.state.bank_cash
         
         done = False
         #loans_ot_by_cscore = np.zeros((NUM_GROUPS, num_cscores))
@@ -288,7 +247,7 @@ def evaluate(env, agent, num_eps, seeds, eval_path, config):
             eval_data.append({
                 "ep": ep,
                 "t" : t,
-                "bank_cash": bank_cash,
+                "bank_cash": bank_cash - bank_starting_cash,
                 "mu0" : env.mu[0],
                 "mu1" : env.mu[1],
                 "mu0_obs" : env.mu_obs[0],
@@ -387,18 +346,17 @@ def main(config, arg_train=False, arg_eval=False, is_outside_func_call=False):
         model_path = os.path.join(base_path, seed_dir, "final_model")
         env = DelayedImpactEnv(env_params)
         agent = PPO.load(model_path, verbose=1)
-        env = RRMEnvWrapper(env, reward_fn = LendingReward, omega=config.environment.omega, dist_test=False, ep_timesteps = config.algorithm.eval_timesteps)
-        name = "test"
+        env = RRMEnvWrapper(env, reward_fn = LendingReward, omega=config.environment.omega, dist_test=True, ep_timesteps = config.algorithm.eval_timesteps)
 
         evaluate(
                 env=env,
                 agent=agent,
                 num_eps=eval_eps,
                 seeds=seeds,
-                eval_path=os.path.join(config.general.eval_dir, name),
+                eval_path=config.general.eval_dir,
                 config=config,
             )
-        eval_paths.append(os.path.join(config.general.eval_dir, name))
+        eval_paths.append(config.general.eval_dir)
 
 
     for path in eval_paths:
@@ -436,9 +394,7 @@ if __name__ == '__main__':
 
     if args.config_path is None:
         logger.info("No config file provided, using default config")
-
-        config = default_config
-    
+        config = "config_files/ppo_simple_fair.yaml"
     else:
         config = args.config_path
 
