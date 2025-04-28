@@ -49,8 +49,6 @@ class GeneralParams:
     seed: Optional[int] = None
     algorithm: str = MISSING
     exp_dir: str = MISSING
-    save_dir: str = MISSING
-    eval_dir: str = MISSING
     n_seeds: int = 1
 
 @dataclass
@@ -135,12 +133,13 @@ def train_multi(
 
     model = None
     
-    shutil.rmtree(config.general.exp_dir, ignore_errors=True)
-    Path(config.general.save_dir).mkdir(parents=True, exist_ok=True)
+    save_dir = os.path.join(config.general.exp_dir, config.general.algorithm, "models")
+    shutil.rmtree(os.path.join(config.general.exp_dir, config.general.algorithm), ignore_errors=True)
+    Path(save_dir).mkdir(parents=True, exist_ok=True)
 
-    save_code(config.general.save_dir)
+    save_code(save_dir)
 
-    with open(os.path.join(config.general.save_dir, 'config.txt'), 'w') as f:
+    with open(os.path.join(save_dir, 'config.txt'), 'w') as f:
         f.write('----------------------------------------------------\n')
         f.write('----------------------------------------------------\n')
         date_time_str = datetime.now().strftime("%b %d, %Y at %H:%M:%S")
@@ -161,10 +160,10 @@ def train_multi(
         env = Monitor(env)
         env = DummyVecEnv([lambda: env])
         
-        with open(os.path.join(config.general.save_dir, 'config.txt'), 'a') as f:
+        with open(os.path.join(save_dir, 'config.txt'), 'a') as f:
             f.write(f'SEED{i}: {seed}\n')
         
-        save_dir = os.path.join(config.general.save_dir, f'seed_{seed}')
+        save_dir = os.path.join(save_dir, f'seed_{seed}')
         activation_fn = getattr(torch.nn, config.policy.activation_fn)
         model = PPO(
             env = env,
@@ -293,14 +292,15 @@ def main(config, arg_train=False, arg_eval=False, is_outside_func_call=False):
     t_seeds = train_multi(config, env_params)
 
     # Initialize eval directory to store eval information
-    shutil.rmtree(config.general.eval_dir, ignore_errors=True)
-    Path(config.general.eval_dir).mkdir(parents=True, exist_ok=True)
+    eval_dir = os.path.join(config.general.exp_dir, config.general.algorithm, "evaluation")
+    shutil.rmtree(eval_dir, ignore_errors=True)
+    Path(eval_dir).mkdir(parents=True, exist_ok=True)
 
     # Get random seeds
     eval_eps = 5 # 10
     seeds = [random.randint(0, 10000) for _ in range(eval_eps)]
 
-    with open(os.path.join(config.general.eval_dir, 'seeds.txt'), 'w') as f:
+    with open(os.path.join(eval_dir, 'seeds.txt'), 'w') as f:
         f.write(str(seeds)+"\n")
         f.write(str(config))
 
@@ -340,7 +340,7 @@ def main(config, arg_train=False, arg_eval=False, is_outside_func_call=False):
             eval_paths.append(os.path.join(args.eval_path, m_name))
             
     else:
-        base_path = config.general.save_dir
+        base_path = os.path.join(config.general.exp_dir, config.general.algorithm, "models")
         seed_dirs = [f for f in os.listdir(base_path) if os.path.isdir(os.path.join(base_path, f))]
         seed_dir = seed_dirs[0]
         model_path = os.path.join(base_path, seed_dir, "final_model")
@@ -348,15 +348,16 @@ def main(config, arg_train=False, arg_eval=False, is_outside_func_call=False):
         agent = PPO.load(model_path, verbose=1)
         env = RRMEnvWrapper(env, reward_fn = LendingReward, omega=config.environment.omega, dist_test=True, ep_timesteps = config.algorithm.eval_timesteps)
 
+        eval_dir = os.path.join(config.general.exp_dir, config.general.algorithm, "evaluation")
         evaluate(
                 env=env,
                 agent=agent,
                 num_eps=eval_eps,
                 seeds=seeds,
-                eval_path=config.general.eval_dir,
+                eval_path=eval_dir,
                 config=config,
             )
-        eval_paths.append(config.general.eval_dir)
+        eval_paths.append(eval_dir)
 
 
     for path in eval_paths:

@@ -1,9 +1,7 @@
 general:
   seed: 2025
-  algorithm: ppo
-  exp_dir: ./results/ppo
-  save_dir: ./results/ppo/models
-  eval_dir: ./results/ppo/evaluation
+  algorithm: ppo-reward-fair
+  exp_dir: ./results
   n_seeds: 1
 
 environment:

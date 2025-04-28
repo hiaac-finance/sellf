@@ -48,8 +48,6 @@ class GeneralParams:
     seed: Optional[int] = None
     algorithm: str = MISSING
     exp_dir: str = MISSING
-    save_dir: str = MISSING
-    eval_dir: str = MISSING
     n_seeds: int = 1
 
 @dataclass
@@ -105,48 +103,6 @@ def validate_config(parameters):
     return validated_config
 
 
-default_config = {
-    "general" : {
-        "seed" : 2025,
-        "algorithm" : "RRM",
-        "exp_dir": "./results/rrm",
-        "save_dir": "./results/rrm/models",
-        "eval_dir" : "./results/rrm/evaluation",
-        "n_seeds" : 1,
-    },
-    "environment" : {
-        "partial_observation" : False,
-        "cluster_probabilities" : [
-            [0.0, 0.0, 0.05, 0.05, 0.05, 0.05, 0.1, 0.1, 0.15, 0.15, 0.15, 0.15, 0.0, 0.0],
-            [0.05, 0.05, 0.05, 0.05, 0.1, 0.1, 0.15, 0.15, 0.15, 0.15, 0.0, 0.0, 0.0, 0.0],
-        ],
-        "group_likelihoods" : [0.5, 0.5],
-        "success_probabilities" : [
-            [0.773, 0.804, 0.833, 0.857, 0.879, 0.898, 0.914, 0.928, 0.939, 0.949, 0.958, 0.965, 0.970, 0.975],
-            [0.773, 0.804, 0.833, 0.857, 0.879, 0.898, 0.914, 0.928, 0.939, 0.949, 0.958, 0.965, 0.970, 0.975],
-        ],
-        "credit_drift_probs" : [[0.1, 0.8, 0.1], [0.1, 0.8, 0.1]],
-        "bank_starting_cash" : 10_000,
-        "interest_rate" : .1,
-        "cluster_shift_increment" : 0.01,
-        "ep_timesteps" : 500,
-        "omega" : 0.,
-    },
-    "algorithm" : {
-        "policy": "MlpPolicy",
-        "learning_rate": 1e-4,
-        "n_steps": 500,
-        "batch_size" : 64,
-        "n_epochs": 1,
-        "train_timesteps" : 100_000,
-        "eval_timesteps" : 500,
-    },
-    "policy" : {
-        "activation_fn" : "ReLU",
-        "net_arch" : [256, 256, dict(vf=[256, 128], pi=[256, 128])],
-    }
-}
-
 def save_code(save_dir):
     print('Saving code...')
     code_dir = './'
@@ -176,12 +132,13 @@ def train_multi(
 
     model = None
     
-    shutil.rmtree(config.general.exp_dir, ignore_errors=True)
-    Path(config.general.save_dir).mkdir(parents=True, exist_ok=True)
+    save_dir = os.path.join(config.general.exp_dir, config.general.algorithm, "models")
+    shutil.rmtree(os.path.join(config.general.exp_dir, config.general.algorithm), ignore_errors=True)
+    Path(save_dir).mkdir(parents=True, exist_ok=True)
 
-    save_code(config.general.save_dir)
+    save_code(save_dir)
 
-    with open(os.path.join(config.general.save_dir, 'config.txt'), 'w') as f:
+    with open(os.path.join(save_dir, 'config.txt'), 'w') as f:
         f.write('----------------------------------------------------\n')
         f.write('----------------------------------------------------\n')
         date_time_str = datetime.now().strftime("%b %d, %Y at %H:%M:%S")
@@ -203,10 +160,10 @@ def train_multi(
         env = Monitor(env)
         env = DummyVecEnv([lambda: env])
         
-        with open(os.path.join(config.general.save_dir, 'config.txt'), 'a') as f:
+        with open(os.path.join(save_dir, 'config.txt'), 'a') as f:
             f.write(f'SEED{i}: {seed}\n')
         
-        save_dir = os.path.join(config.general.save_dir, f'seed_{seed}')
+        save_dir = os.path.join(save_dir, f'seed_{seed}')
         activation_fn = getattr(torch.nn, config.policy.activation_fn)
         model = RRM(
             env = env,
@@ -263,12 +220,13 @@ def evaluate(env, agent, num_eps, seeds, eval_path, config):
         env.seed(seeds[ep])
 
         obs = env.reset()
+        bank_starting_cash = env.state.bank_cash
         
         done = False
         #loans_ot_by_cscore = np.zeros((NUM_GROUPS, num_cscores))
         #cscore_seen_over_time = np.zeros((NUM_GROUPS, num_cscores))
         #dummy_buff = DummyEvalBuffer(num_timesteps, obs.shape, 2, 1, 100, config_params.DELAYED_IMPACT_CLUSTER_PROBS, config_params.QUAL_CHANGE)
-        for t in tqdm.trange(config.environment.ep_timesteps):
+        for t in tqdm.trange(config.algorithm.eval_timesteps):
 
             action = agent.predict(obs)[0]
             #if algorithm == 'cpo':
@@ -287,7 +245,7 @@ def evaluate(env, agent, num_eps, seeds, eval_path, config):
             eval_data.append({
                 "ep": ep,
                 "t" : t,
-                "bank_cash": bank_cash,
+                "bank_cash": bank_cash - bank_starting_cash,
                 "mu0" : env.mu[0],
                 "mu1" : env.mu[1],
                 "mu0_obs" : env.mu_obs[0],
@@ -333,14 +291,15 @@ def main(config, arg_train=False, arg_eval=False, is_outside_func_call=False):
     t_seeds = train_multi(config, env_params)
 
     # Initialize eval directory to store eval information
-    shutil.rmtree(config.general.eval_dir, ignore_errors=True)
-    Path(config.general.eval_dir).mkdir(parents=True, exist_ok=True)
+    eval_dir = os.path.join(config.general.exp_dir, config.general.algorithm, "evaluation")
+    shutil.rmtree(eval_dir, ignore_errors=True)
+    Path(eval_dir).mkdir(parents=True, exist_ok=True)
 
     # Get random seeds
     eval_eps = 5 # 10
     seeds = [random.randint(0, 10000) for _ in range(eval_eps)]
 
-    with open(os.path.join(config.general.eval_dir, 'seeds.txt'), 'w') as f:
+    with open(os.path.join(eval_dir, 'seeds.txt'), 'w') as f:
         f.write(str(seeds)+"\n")
         f.write(str(config))
 
@@ -348,7 +307,7 @@ def main(config, arg_train=False, arg_eval=False, is_outside_func_call=False):
 
     if config.general.n_seeds != 1:
         weights_step = model_path.split('/')[-1]
-        base_path = conf.SAVE_DIR
+        base_path = config.SAVE_DIR
         seed_dirs = [f for f in os.listdir(base_path) if os.path.isdir(os.path.join(base_path, f))]
 
         for seed_dir in seed_dirs:
@@ -378,7 +337,7 @@ def main(config, arg_train=False, arg_eval=False, is_outside_func_call=False):
             eval_paths.append(os.path.join(args.eval_path, m_name))
             
     else:
-        base_path = config.general.save_dir
+        base_path = os.path.join(config.general.exp_dir, config.general.algorithm, "models")
         seed_dirs = [f for f in os.listdir(base_path) if os.path.isdir(os.path.join(base_path, f))]
         seed_dir = seed_dirs[0]
         model_path = os.path.join(base_path, seed_dir, "final_model")
@@ -392,10 +351,10 @@ def main(config, arg_train=False, arg_eval=False, is_outside_func_call=False):
                 agent=agent,
                 num_eps=eval_eps,
                 seeds=seeds,
-                eval_path=os.path.join(config.general.eval_dir, name),
+                eval_path=eval_dir,
                 config=config,
             )
-        eval_paths.append(os.path.join(config.general.eval_dir, name))
+        eval_paths.append(eval_dir)
 
 
     for path in eval_paths:
@@ -433,9 +392,7 @@ if __name__ == '__main__':
 
     if args.config_path is None:
         logger.info("No config file provided, using default config")
-
-        config = default_config
-    
+        config = "config_files/rrm.yaml"
     else:
         config = args.config_path
 
