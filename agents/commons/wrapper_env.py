@@ -5,11 +5,8 @@ from gym import spaces
 from copy import deepcopy
 from collections import deque
 
-from environments.distributions import Bernoulli
 
-
-
-class PPOPredEnvWrapper(gym.Wrapper):
+class FairWrapper(gym.Wrapper):
     def __init__(
         self,
         env,
@@ -22,7 +19,7 @@ class PPOPredEnvWrapper(gym.Wrapper):
         pop_window: int = 300,
         ep_timesteps: int = 500,
         ):
-        super(PPOPredEnvWrapper, self).__init__(env)
+        super(FairWrapper, self).__init__(env)
 
         self.omega = omega
         self.mu_type = mu_type
@@ -176,7 +173,7 @@ class PPOPredEnvWrapper(gym.Wrapper):
             self.delta_obs = np.abs(self.mu_obs[0] - self.mu_obs[1])
             self.delta_pred = np.abs(self.mu_pred[0] - self.mu_pred[1])
 
-        elif self.mu_type == "quali":
+        elif self.mu_type == "qualification":
             for i in range(2):
                 self.mu[i] = np.mean(self.y_hist[i]) if len(self.y_hist[i]) > 0 else 1
                 self.mu_obs[i] = np.mean(self.y_obs_hist[i]) if len(self.y_obs_hist[i]) > 0 else 1

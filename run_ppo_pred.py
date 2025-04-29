@@ -3,6 +3,8 @@ from dataclasses import dataclass, field
 from omegaconf import OmegaConf, MISSING
 import argparse
 import os
+os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 import zipfile
 from datetime import datetime
 import random
@@ -25,8 +27,7 @@ from environments.lending import DelayedImpactEnv
 from environments.lending_params import DelayedImpactParams, two_group_credit_clusters
 from environments.rewards import LendingReward
 from agents.ppo_pred.ppo_pred import PPOPred
-from agents.ppo_pred.buffer import RolloutBuffer
-from agents.ppo_pred.wrapper_env import PPOPredEnvWrapper
+from agents.commons.wrapper_env import FairWrapper
 from graphing.plot_all import complete_plot_reward_mu
 from omegaconf import OmegaConf
 
@@ -63,6 +64,7 @@ class EnvironmentParams:
     cluster_shift_increment: float = MISSING
     ep_timesteps: int = MISSING
     omega: float = MISSING
+    mu_type: str = MISSING
 
 @dataclass
 class AlgorithmParams:
@@ -73,8 +75,10 @@ class AlgorithmParams:
     n_epochs: int = MISSING
     train_timesteps: int = MISSING
     eval_timesteps: int = MISSING
-    disp_coef: float = 0.5
-    pred_coef: float = 0.2
+    disp_coef: float = MISSING
+    pred_coef: float = MISSING
+    unc_coef: float = MISSING
+
 
 @dataclass
 class PolicyParams:
@@ -158,7 +162,7 @@ def train_multi(
         env = DelayedImpactEnv(env_params)
         seed = seeds[i]
         env.seed(seed)
-        env = PPOPredEnvWrapper(env=env, reward_fn=LendingReward, omega=config.environment.omega, dist_test=True)
+        env = FairWrapper(env, reward_fn = LendingReward, omega=config.environment.omega, dist_test=True, mu_type = config.environment.mu_type)
         env = Monitor(env)
         env = DummyVecEnv([lambda: env])
         
@@ -184,33 +188,8 @@ def train_multi(
         
         model.learn(total_timesteps=config.algorithm.train_timesteps) #, callback=checkpoint_callback)
         model.save(os.path.join(save_dir, 'final_model'))
-
-        # Once we finish learning, plot the returns over time and save into the experiments directory
-        #try:
-        #    plot_rets(save_dir)
-        #except:
-        #    plt.close()
-        #    print(f'Could not plot returns for {save_dir}')
-
-        # column_list = [ 'train/cumulative_gx_g0', 'train/cumulative_gx_g1',
-        #             'rollout/ep_rew_mean', 'train/policy_constraint_loss', 'train/lambda_loss',
-        #     'train/policy_gradient_loss', 'train/value_loss',
-        #     'train/static_kl', 'train/cumulative_reward', 'train/soft_de', 'train/soft_ie', 'train/soft_se', 'train/c_pi_theta',
-        #     'train/rolling_soft_de', 'train/rolling_soft_ie', 'train/rolling_soft_se', 'train/rolling_c_pi_theta']
-        # try:
-        #     plot_progress_data(save_dir, column_list)
-        # except:
-        #     plt.close()
-        #     print(f'Could not plot progress data for {save_dir}')
-
-    #try:
-    #    plot_multi_seed_progress_data(SAVE_DIR, seeds, column_list)
-    #except:
-    #    plt.close()
-    #    print(f'Could not plot multi_seed_progress_data for {SAVE_DIR}')
     return seeds
     
-
 
 def evaluate(env, agent, num_eps, seeds, eval_path, config):
     eval_data = []
@@ -225,21 +204,8 @@ def evaluate(env, agent, num_eps, seeds, eval_path, config):
         bank_starting_cash = env.state.bank_cash
         
         done = False
-        #loans_ot_by_cscore = np.zeros((NUM_GROUPS, num_cscores))
-        #cscore_seen_over_time = np.zeros((NUM_GROUPS, num_cscores))
-        #dummy_buff = DummyEvalBuffer(num_timesteps, obs.shape, 2, 1, 100, config_params.DELAYED_IMPACT_CLUSTER_PROBS, config_params.QUAL_CHANGE)
         for t in tqdm.trange(config.algorithm.eval_timesteps):
-
             action = agent.predict(obs)[0]
-            #if algorithm == 'cpo':
-            #    action = int(agent(torch.FloatTensor(obs).squeeze()).sample().item())
-            #else:
-            #    if isinstance(agent, PPO):
-            #        action = agent.predict(obs)[0]
-            #    else:
-            #        action = agent.act(obs, done)
-
-            # Logging
 
             next_obs, rew, done, info = env.step(action)
             bank_cash = env.state.bank_cash
@@ -270,13 +236,10 @@ def evaluate(env, agent, num_eps, seeds, eval_path, config):
     return eval_data
 
 
-def main(config, arg_train=False, arg_eval=False, is_outside_func_call=False):
-    if is_outside_func_call:
-        print('Is outside function call...')
-        random.seed(config.general.seed)
-        np.random.seed(config.general.seed)
-        torch.manual_seed(config.general.seed)
-
+def main(config, arg_train=False, arg_eval=False):
+    random.seed(config.general.seed)
+    np.random.seed(config.general.seed)
+    torch.manual_seed(config.general.seed)
 
     env_params = DelayedImpactParams(
         applicant_distribution=two_group_credit_clusters(
@@ -291,7 +254,7 @@ def main(config, arg_train=False, arg_eval=False, is_outside_func_call=False):
     env = DelayedImpactEnv(env_params)
     env.seed(config.general.seed)
 
-    t_seeds = train_multi(config, env_params)
+    train_multi(config, env_params)
 
     # Initialize eval directory to store eval information
     eval_dir = os.path.join(config.general.exp_dir, config.general.algorithm, "evaluation")
@@ -306,67 +269,29 @@ def main(config, arg_train=False, arg_eval=False, is_outside_func_call=False):
         f.write(str(seeds)+"\n")
         f.write(str(config))
 
-    eval_paths = []
 
 
+    base_path = os.path.join(config.general.exp_dir, config.general.algorithm, "models")
+    seed_dir = [f for f in os.listdir(base_path) if os.path.isdir(os.path.join(base_path, f))][0]
+    model_path = os.path.join(base_path, seed_dir, "final_model")
+    env = DelayedImpactEnv(env_params)
+    agent = PPOPred.load(model_path, verbose=1)
+    env = FairWrapper(env, reward_fn = LendingReward, omega=config.environment.omega, dist_test=True, ep_timesteps = config.algorithm.eval_timesteps, mu_type = config.environment.mu_type)
 
-    if config.general.n_seeds != 1:
-        weights_step = model_path.split('/')[-1]
-        base_path = config.SAVE_DIR
-        seed_dirs = [f for f in os.listdir(base_path) if os.path.isdir(os.path.join(base_path, f))]
+    eval_dir = os.path.join(config.general.exp_dir, config.general.algorithm, "evaluation")
+    evaluate(
+        env=env,
+        agent=agent,
+        num_eps=eval_eps,
+        seeds=seeds,
+        eval_path=eval_dir, config=config,
+    )
 
-        for seed_dir in seed_dirs:
-            model_path = os.path.join(base_path, seed_dir, weights_step)
-            env = DelayedImpactEnv(env_params)
-            agent = PPOPred.load(model_path, device=device, verbose=1)
-
-            # I think PPO.load converts keys to strings b/c json stuff, want keys to be ints
-            new_ben_dict = {}
-            for k, v in agent.benefit_deltas_dict.items(): 
-                for x_k, x_v in v.items():
-                    if int(k) not in new_ben_dict:
-                        new_ben_dict[int(k)] = {}
-                    new_ben_dict[int(k)][int(x_k)] = x_v
-            agent.benefit_deltas_dict = new_ben_dict 
-
-            m_name = os.path.join(name, seed_dir)
-
-            eval_data = evaluate(env=PPOEnvWrapper(env=env, reward_fn=LendingReward, config_params=conf, is_eval=True),
-                    agent=agent,
-                    num_eps=eval_eps,
-                    name=m_name,
-                    seeds=seeds,
-                    eval_path=os.path.join(args.eval_path, m_name),
-                    config_params=conf,
-            )
-            eval_paths.append(os.path.join(args.eval_path, m_name))
-            
-    else:
-        base_path = os.path.join(config.general.exp_dir, config.general.algorithm, "models")
-        seed_dirs = [f for f in os.listdir(base_path) if os.path.isdir(os.path.join(base_path, f))]
-        seed_dir = seed_dirs[0]
-        model_path = os.path.join(base_path, seed_dir, "final_model")
-        env = DelayedImpactEnv(env_params)
-        agent = PPOPred.load(model_path, verbose=1)
-        env = PPOPredEnvWrapper(env, reward_fn = LendingReward, omega=config.environment.omega, dist_test=True, ep_timesteps = config.algorithm.eval_timesteps)
-
-        eval_dir = os.path.join(config.general.exp_dir, config.general.algorithm, "evaluation")
-        evaluate(
-                env=env,
-                agent=agent,
-                num_eps=eval_eps,
-                seeds=seeds,
-                eval_path=eval_dir,
-                config=config,
-            )
-        eval_paths.append(eval_dir)
-
-
-    for path in eval_paths:
-        with open(os.path.join(path, 'eval_data.pkl'), 'rb') as f:
-            eval_data = pickle.load(f)
-        eval_data = pd.DataFrame(eval_data)
-        complete_plot_reward_mu(eval_data, path)
+    #for path in eval_paths:
+    #    with open(os.path.join(path, 'eval_data.pkl'), 'rb') as f:
+    #        eval_data = pickle.load(f)
+    #    eval_data = pd.DataFrame(eval_data)
+    #    complete_plot_reward_mu(eval_data, path)
 
     
 
@@ -380,8 +305,8 @@ def validate_config(parameters):
     else:
         raise ValueError("Invalid parameters type")
 
-    #validated_config = OmegaConf.merge(template, params)
-    #validated_config = cast(Config, validated_config)
+    validated_config = OmegaConf.merge(template, params)
+    validated_config = cast(Config, validated_config)
 
     return params
 
@@ -390,22 +315,13 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
     parser.add_argument('config_path', nargs='?',type=str, help='Path to the config file')
-    parser.add_argument('--sweeps', '-s', action='store_true', help='Run sweeps')
-    #parser.add_argument('--train', action='store_true', default=False)
-    #parser.add_argument('--eval', action='store_true', default=False)
     args = parser.parse_args()
 
     if args.config_path is None:
         logger.info("No config file provided, using default config")
-        config = "config_files/ppopred.yaml"
+        config = "config_files/synthetic_eq/ppo_pred.yaml"
     else:
         config = args.config_path
 
-
-    #random.seed(config.seed)
-    #np.random.seed(config.seed)
-    #torch.manual_seed(config.seed)
-    # torch.cuda.manual_seed(SEED)
-    
     config = validate_config(config)
     main(config)

@@ -190,6 +190,7 @@ class OnPolicyAlgorithm(BaseAlgorithm):
                 y_pred = self.policy.predict_label(obs_tensor)
 
             actions = actions.cpu().numpy()
+            y_pred = y_pred.cpu().numpy()
 
             # Rescale and perform action
             clipped_actions = actions
