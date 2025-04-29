@@ -86,6 +86,7 @@ class PPOPred(OnPolicyAlgorithm):
             normalize_advantage: bool = True,
             disp_coef: float = 0.5,
             pred_coef: float = 0.1,
+            unc_coef: float = 0.0,
             ent_coef: float = 0.0,
             omega: float = 0.02,
             vf_coef: float = 0.5,
@@ -165,6 +166,7 @@ class PPOPred(OnPolicyAlgorithm):
         self.target_kl = target_kl
         self.disp_coef = disp_coef
         self.pred_coef = pred_coef
+        self.unc_coef = unc_coef
         self.omega = omega
         self.static_kl_coeff = static_kl_coeff
         self.kl_pen = kl_pen
@@ -234,10 +236,18 @@ class PPOPred(OnPolicyAlgorithm):
                     torch.zeros(deltas.shape[0]).to(self.device),
                     -deltas + torch.tensor(self.omega, dtype=torch.float32)
                 )
-                advantages = advantages + self.disp_coef * disp
+                # calculate uncertainty of predictions
+                with th.no_grad():
+                    pred = self.policy.prob_label(rollout_data.observations)
+                # uncertainty is how distant the predicted label is from the mean
+                uncertainty = th.abs(pred - pred.mean(dim=1, keepdim=True))
                 if self.normalize_advantage:
+                    disp = (disp - disp.mean()) / (disp.std() + 1e-8)
+                    uncertainty = (uncertainty - uncertainty.mean()) / (uncertainty.std() + 1e-8)
                     advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
-                    
+
+                advantages = advantages + self.disp_coef * disp + self.unc_coef * uncertainty
+                                    
 
                 # q_log_p contains the log likelihood of the actions sampled in the trajectory
                 ratio = th.exp(log_prob - rollout_data.old_log_probs)
