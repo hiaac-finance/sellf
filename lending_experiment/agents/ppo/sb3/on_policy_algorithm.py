@@ -119,7 +119,7 @@ class OnPolicyAlgorithm(BaseAlgorithm):
             gae_lambda=self.gae_lambda,
             n_envs=self.n_envs,
         )
-        self.policy = self.policy_class(  # pytype:disable=not-instantiable
+        self.policy = PredActorCriticPolicy(  # pytype:disable=not-instantiable
             self.observation_space,
             self.action_space,
             self.lr_schedule,
