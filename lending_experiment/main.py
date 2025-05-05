@@ -9,6 +9,10 @@ import os
 import random
 import shutil
 from pathlib import Path
+from omegaconf import OmegaConf
+
+os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 import numpy as np
 import pandas as pd
@@ -23,9 +27,6 @@ from yaml import full_load
 
 import sys; sys.path.append('..')
 
-from lending_experiment.config import CLUSTER_PROBABILITIES, GROUP_0_PROB, BANK_STARTING_CASH, INTEREST_RATE, \
-    CLUSTER_SHIFT_INCREMENT, BURNIN, MAXIMIZE_REWARD, EQUALIZE_OPPORTUNITY, EP_TIMESTEPS, NUM_GROUPS, EVAL_ZETA_0, \
-    EVAL_ZETA_1, TRAIN_TIMESTEPS, SAVE_DIR, EXP_DIR, POLICY_KWARGS, LEARNING_RATE, SAVE_FREQ, EVAL_MODEL_PATHS
 from lending_experiment.environments import params, rewards
 from lending_experiment.environments.lending import DelayedImpactEnv
 from lending_experiment.environments.lending_params import DelayedImpactParams, two_group_credit_clusters
@@ -37,18 +38,32 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print('Using device: ', device)
 torch.cuda.empty_cache()
 
+def get_env(env_name: str):
+    if env_name == "yu2022":
+        env_params = DelayedImpactParams(
+            applicant_distribution=two_group_credit_clusters(
+                cluster_probabilities=[
+                    [0.0, 0.1, 0.1, 0.2, 0.3, 0.3, 0.0],
+                    [0.1, 0.1, 0.2, 0.3, 0.3, 0.0, 0.0],
+                ],
+                group_likelihoods=[0.5, 0.5],
+                success_probabilities=[
+                    [0.1, 0.2, 0.45, 0.6, 0.65, 0.7, 0.7], 
+                    [0.1, 0.2, 0.45, 0.6, 0.65, 0.7, 0.7]
+                ]
+            ),
+            bank_starting_cash=10_000,
+            interest_rate=1,
+            cluster_shift_increment=0.01,
+        )
+        env = DelayedImpactEnv(env_params)
+    return env
 
-def train(train_timesteps, env):
 
-    exp_exists = False
-    if os.path.isdir(SAVE_DIR):
-        exp_exists = True
-        # resp = input(f'{SAVE_DIR} already exists; do you want to retrain / continue training? (y/n): ')
-        resp = "y" # HARD CODED
-        if resp != 'y':
-            exit()
+def train(train_timesteps, env, config):
 
-        print('Training from start...')
+    exp_dir = os.path.join(config.general.exp_dir, config.general.env_name)
+    save_dir = os.path.join(exp_dir, config.general.algorithm, "models")
 
     print('env_params: ', env.state.params)
 
@@ -56,40 +71,33 @@ def train(train_timesteps, env):
     env = Monitor(env)
     env = DummyVecEnv([lambda: env])
 
-    model = None
-    should_load = False
-    if exp_exists:
-        #resp = input(f'\nWould you like to load the previous model to continue training? If you do not select yes, you will start a new training. (y/n): ')
-        resp = "n" # HARD CODED
-        if resp != 'y' and resp != 'n':
-            exit('Invalid response for resp: ' + resp)
-        should_load = resp == 'y'
 
-    if should_load:
-        model_name = input(f'Specify the model you would like to load in. Do not include the .zip: ')
-        model = PPO.load(EXP_DIR + "models/" + model_name, verbose=1, device=device)
-        model.set_env(env)
-    else:
-        model = PPO("MlpPolicy", env,
-                    policy_kwargs=POLICY_KWARGS,
-                    verbose=1,
-                    learning_rate=LEARNING_RATE,
-                    device=device)
+    model = PPO(
+        "MlpPolicy", 
+        env,
+        policy_kwargs={
+            "activation_fn": torch.nn.ReLU,
+            "net_arch": [256, 256, dict(vf=[256, 128], pi=[256, 128])],
+        },
+        verbose=1,
+        learning_rate=config.algorithm.learning_rate,
+        device=device
+    )
 
-        shutil.rmtree(EXP_DIR, ignore_errors=True)
-        Path(SAVE_DIR).mkdir(parents=True, exist_ok=True)
+    shutil.rmtree(save_dir, ignore_errors=True)
+    Path(save_dir).mkdir(parents=True, exist_ok=True)
 
-    checkpoint_callback = CheckpointCallback(save_freq=SAVE_FREQ, save_path=SAVE_DIR,
+    checkpoint_callback = CheckpointCallback(save_freq=10_000, save_path=save_dir,
                                              name_prefix='rl_model')
 
-    model.set_logger(configure(folder=EXP_DIR))
+    model.set_logger(configure(folder=save_dir))
     model.learn(total_timesteps=train_timesteps, callback=checkpoint_callback)
-    model.save(SAVE_DIR + '/final_model')
+    model.save(save_dir + '/final_model')
 
     # Once we finish learning, plot the returns over time and save into the experiments directory
     #plot_rets(EXP_DIR)
 
-def evaluate(env, agent, num_eps, num_timesteps, name, seeds, eval_path, algorithm=None):
+def evaluate(env, agent, num_eps, num_timesteps, name, seeds, eval_path):
     print()
     print(f"Evaluating {name}")
     Path(f'{eval_path}/{name}/').mkdir(parents=True, exist_ok=True)
@@ -154,27 +162,36 @@ def evaluate(env, agent, num_eps, num_timesteps, name, seeds, eval_path, algorit
     return eval_data
 
 
+def validate_config(parameters):
+    if isinstance(parameters, dict):
+        params = OmegaConf.create(parameters)
+    
+    elif isinstance(parameters, (str, Path)):
+        params = OmegaConf.load(parameters)
+    
+    else:
+        raise ValueError("Invalid parameters type")
+
+    #validated_config = OmegaConf.merge(template, params)
+    #validated_config = cast(Config, validated_config)
+
+    return params
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--train', action='store_true')
-    parser.add_argument('--algorithm', type=str, default='ppo', choices=['ppo'])
-    parser.add_argument('--eval_path', dest='eval_path', type=str, default=None)
-    parser.add_argument('--display_eval_path', dest='display_eval_path', type=str, default=None)
-    parser.add_argument('--show_train_progress', action='store_true')
+    parser.add_argument("config_path", nargs="?", type=str, help="Path to the config file")
     args = parser.parse_args()
 
-    env_params = DelayedImpactParams(
-        applicant_distribution=two_group_credit_clusters(
-            cluster_probabilities=CLUSTER_PROBABILITIES,
-            group_likelihoods=[GROUP_0_PROB, 1 - GROUP_0_PROB]),
-        bank_starting_cash=BANK_STARTING_CASH,
-        interest_rate=INTEREST_RATE,
-        cluster_shift_increment=CLUSTER_SHIFT_INCREMENT,
-    )
-    env = DelayedImpactEnv(env_params)
+    if args.config_path is None:
+        config = "config_files/yu2022/ppo.yaml"
+    else:
+        config = args.config_path
+    
+    config = validate_config(config)
 
-    if args.train:
-        train(train_timesteps=TRAIN_TIMESTEPS, env=env)
+
+    env = get_env(config.general.env_name)
+    train(train_timesteps=config.algorithm.train_timesteps, env=env, config=config)
     #    plot_rets(exp_path=EXP_DIR, save_png=True)
 
     #if args.show_train_progress:
@@ -183,41 +200,41 @@ def main():
     #if args.display_eval_path is not None:
     #    display_eval_results(eval_dir=args.display_eval_path)
 
-    print(args.eval_path)
+    #print(args.eval_path)
 
-    if args.eval_path is not None:
+    eval_path = os.path.join(config.general.exp_dir, config.general.env_name, config.general.algorithm, "eval")
 
-        assert(args.eval_path is not None)
-        p = Path(args.eval_path)
-        if p.exists():
-            #resp = input(f'{args.eval_path} already exists; do you want to override it? (y/n): ')
-            resp = "y" # HARD CODED
-            if resp != 'y':
-                exit('Exiting.')
+    # Initialize eval directory to store eval information
+    shutil.rmtree(eval_path, ignore_errors=True)
+    Path(eval_path).mkdir(parents=True, exist_ok=True)
 
-        # Initialize eval directory to store eval information
-        shutil.rmtree(args.eval_path, ignore_errors=True)
-        Path(args.eval_path).mkdir(parents=True, exist_ok=True)
+    # Get random seeds
+    eval_eps = 5
+    eval_timesteps = 10000
+    seeds = [random.randint(0, 10000) for _ in range(eval_eps)]
 
-        # Get random seeds
-        eval_eps = 5
-        eval_timesteps = 10000
-        seeds = [random.randint(0, 10000) for _ in range(eval_eps)]
+    with open(eval_path + '/seeds.txt', 'w') as f:
+        f.write(str(seeds))
 
-        with open(args.eval_path + '/seeds.txt', 'w') as f:
-            f.write(str(seeds))
-
-        # First, evaluate PPO human_designed_policies
-        for name, model_path in EVAL_MODEL_PATHS.items():
-            env = DelayedImpactEnv(env_params)
-            agent = PPO.load(model_path, verbose=1)
-            evaluate(env=PPOEnvWrapper(env=env, reward_fn=LendingReward, ep_timesteps=eval_timesteps),
-                     agent=agent,
-                     num_eps=eval_eps,
-                     num_timesteps=eval_timesteps,
-                     name=name,
-                     seeds=seeds,
-                     eval_path=args.eval_path)
+    model_path = os.path.join(
+        config.general.exp_dir,
+        config.general.env_name,
+        config.general.algorithm,
+        "models",
+        "final_model.zip"
+    )
+    env = get_env(config.general.env_name)
+    name = config.general.algorithm
+    agent = PPO.load(model_path, verbose=1)
+    evaluate(
+        env=PPOEnvWrapper(env=env, reward_fn=LendingReward, ep_timesteps=eval_timesteps),
+        agent=agent,
+        num_eps=eval_eps,
+        num_timesteps=eval_timesteps,
+        name=name,
+        seeds=seeds,
+        eval_path=eval_path
+    )
 
 
 if __name__ == '__main__':
