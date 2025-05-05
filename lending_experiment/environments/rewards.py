@@ -25,7 +25,6 @@ from __future__ import print_function
 from typing import Any, Optional
 import numpy as np
 
-from lending_experiment.config import OMEGA
 from lending_experiment.environments import core
 
 
@@ -127,17 +126,20 @@ class LendingReward(core.RewardFn):
   def calc_delta(self, tpr):
     return np.abs(tpr[0] - tpr[1])
 
-  def __call__(self,
-               old_bank_cash,
-               bank_cash,
-               tpr,
-               zeta0,
-               zeta1):
+  def __call__(
+    self,
+    old_bank_cash,
+    bank_cash,
+    tpr,
+    zeta0,
+    zeta1,
+    omega: float = 0.005
+    ) -> float:
 
     bank_cash_term = zeta0 * (bank_cash - old_bank_cash)
 
     delta_term = 0 \
-      if self.calc_delta(tpr) < OMEGA \
+      if self.calc_delta(tpr) < omega \
       else zeta1 * self.calc_delta(tpr)
 
     tot_rew = bank_cash_term - delta_term

@@ -15,6 +15,7 @@ from stable_baselines3.common.utils import obs_as_tensor, safe_mean
 from stable_baselines3.common.vec_env import VecEnv
 
 from agents.ppo.sb3.buffers import RolloutBuffer
+from agents.ppo.sb3.policies import PredActorCriticPolicy
 
 
 class OnPolicyAlgorithm(BaseAlgorithm):

@@ -12,7 +12,6 @@ from stable_baselines3.common.type_aliases import GymEnv, MaybeCallback, Schedul
 from stable_baselines3.common.utils import explained_variance, get_schedule_fn
 
 
-from lending_experiment.config import REGULARIZE_ADVANTAGE, BETA_0, BETA_1, BETA_2, OMEGA
 from lending_experiment.agents.ppo.sb3.on_policy_algorithm import OnPolicyAlgorithm
 
 
@@ -71,6 +70,11 @@ class PPO(OnPolicyAlgorithm):
             policy: Union[str, Type[ActorCriticPolicy]],
             env: Union[GymEnv, str],
             learning_rate: Union[float, Schedule] = 3e-4,
+            ad_reg: str = "pocar",
+            beta_0: float = 1.0,
+            beta_1: float = 0.25,
+            beta_2: float = 0.25,
+            omega: float = 0.005,
             n_steps: int = 2048,
             batch_size: int = 64,
             n_epochs: int = 10,
@@ -146,6 +150,11 @@ class PPO(OnPolicyAlgorithm):
                     f"We recommend using a `batch_size` that is a factor of `n_steps * n_envs`.\n"
                     f"Info: (n_steps={self.n_steps} and n_envs={self.env.num_envs})"
                 )
+        self.ad_reg = ad_reg
+        self.beta_0 = beta_0
+        self.beta_1 = beta_1
+        self.beta_2 = beta_2
+        self.omega = omega
         self.batch_size = batch_size
         self.n_epochs = n_epochs
         self.clip_range = clip_range
@@ -207,15 +216,15 @@ class PPO(OnPolicyAlgorithm):
                 advantages = rollout_data.advantages
 
                 # Advantage regularization for fairness here
-                if REGULARIZE_ADVANTAGE:
+                if self.ad_reg == "pocar":
                     # Compute value-thresholding (vt) term as part of Eq. 3 from the paper
                     vt_term = torch.min(
                         torch.zeros(rollout_data.deltas.shape[0]).to(self.device),
-                        -rollout_data.deltas + torch.tensor(OMEGA, dtype=torch.float32)
+                        -rollout_data.deltas + torch.tensor(self.omega, dtype=torch.float32)
                     )
 
                     # Compute decrease-in-violation (div) term as part of Eq. 3 from the paper
-                    div_cond = torch.where(rollout_data.deltas > torch.tensor(OMEGA, dtype=torch.float32).to(self.device),
+                    div_cond = torch.where(rollout_data.deltas > torch.tensor(self.omega, dtype=torch.float32).to(self.device),
                                            torch.tensor(1, dtype=torch.float32).to(self.device),
                                            torch.tensor(0, dtype=torch.float32).to(self.device))
                     div_term = torch.min(torch.zeros(rollout_data.delta_deltas.shape[0]).to(self.device),
@@ -227,7 +236,7 @@ class PPO(OnPolicyAlgorithm):
                     div_term = (div_term - torch.min(div_term)) / (torch.max(div_term) - torch.min(div_term) + 1e-8)
 
                     # Add terms to advantages
-                    advantages = (BETA_0 * advantages + BETA_1 * vt_term + BETA_2 * div_term)
+                    advantages = (self.beta_0 * advantages + self.beta_1 * vt_term + self.beta_2 * div_term)
 
                 # Normalize advantage
                 if self.normalize_advantage:
