@@ -11,6 +11,7 @@ import shutil
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import torch
 import tqdm
 from absl import flags
@@ -42,7 +43,9 @@ def train(train_timesteps, env):
     exp_exists = False
     if os.path.isdir(SAVE_DIR):
         exp_exists = True
-        if input(f'{SAVE_DIR} already exists; do you want to retrain / continue training? (y/n): ') != 'y':
+        # resp = input(f'{SAVE_DIR} already exists; do you want to retrain / continue training? (y/n): ')
+        resp = "y" # HARD CODED
+        if resp != 'y':
             exit()
 
         print('Training from start...')
@@ -56,7 +59,8 @@ def train(train_timesteps, env):
     model = None
     should_load = False
     if exp_exists:
-        resp = input(f'\nWould you like to load the previous model to continue training? If you do not select yes, you will start a new training. (y/n): ')
+        #resp = input(f'\nWould you like to load the previous model to continue training? If you do not select yes, you will start a new training. (y/n): ')
+        resp = "n" # HARD CODED
         if resp != 'y' and resp != 'n':
             exit('Invalid response for resp: ' + resp)
         should_load = resp == 'y'
@@ -89,22 +93,7 @@ def evaluate(env, agent, num_eps, num_timesteps, name, seeds, eval_path, algorit
     print()
     print(f"Evaluating {name}")
     Path(f'{eval_path}/{name}/').mkdir(parents=True, exist_ok=True)
-    eval_data = {
-        'tot_loans': np.zeros((num_eps, NUM_GROUPS)),  # The number of loans per group per episode
-        'tot_tp': np.zeros((num_eps, NUM_GROUPS)),  # The number of true positives, or no default given loan accepted, per group per episode
-        'tot_fp': np.zeros((num_eps, NUM_GROUPS)),  # The number of false positives, or default given loan accepted, per group per episode
-        'tot_tn': np.zeros((num_eps, NUM_GROUPS)),  # The number of true negatives, or default given loan rejected, per group per episode
-        'tot_fn': np.zeros((num_eps, NUM_GROUPS)),  # The number of false negatives, or no default given loan rejected, per group per episode
-        'tot_tpr': np.zeros((num_eps, NUM_GROUPS)),  # The TPR per group per episode
-        'tot_rews_over_time': np.zeros((num_eps, num_timesteps)),  # The reward per timestep per episode
-        'tot_loans_over_time': np.zeros((num_eps, num_timesteps,  NUM_GROUPS)),  # The number of loans per group per timestep per episode
-        'tot_bank_cash_over_time': np.zeros((num_eps, num_timesteps)),  # The amount of bank cash per timestep per episode
-        'tot_tp_over_time': np.zeros((num_eps, num_timesteps, NUM_GROUPS)),  # The TP per group per timestep per episode
-        'tot_fp_over_time': np.zeros((num_eps, num_timesteps, NUM_GROUPS)),  # The FP per group per timestep per episode
-        'tot_tn_over_time': np.zeros((num_eps, num_timesteps, NUM_GROUPS)),  # The TN per group per timestep per episode
-        'tot_fn_over_time': np.zeros((num_eps, num_timesteps, NUM_GROUPS)),  # The FN per group per timestep per episode
-        'tot_tpr_over_time': np.zeros((num_eps, num_timesteps, NUM_GROUPS)),  # The TPR per group per timestep per episode
-    }
+    eval_data = []
 
     reward_fn = LendingReward()
 
@@ -129,34 +118,7 @@ def evaluate(env, agent, num_eps, num_timesteps, name, seeds, eval_path, algorit
             # Logging
             group_id = np.argmax(env.state.group)
             # Add to loans if the agent wants to loan
-            if action == 1:
-                eval_data['tot_loans'][ep][group_id] += 1
-                # Check if agent would default
-                if env.state.will_default:
-                    eval_data['tot_fp'][ep][group_id] += 1
-                else:
-                    eval_data['tot_tp'][ep][group_id] += 1
-            elif action == 0:
-                if env.state.will_default:
-                    eval_data['tot_tn'][ep][group_id] += 1
-                else:
-                    eval_data['tot_fn'][ep][group_id] += 1
 
-            # Update TPR for both groups per timestep.
-            # In the edge case where denom is 0, set TPR to 0
-            eval_data['tot_tpr'][ep] = np.divide(
-                eval_data['tot_tp'][ep],
-                eval_data['tot_tp'][ep] + eval_data['tot_fn'][ep],
-                out=np.zeros_like(eval_data['tot_tp'][ep]),
-                where=(eval_data['tot_tp'][ep] + eval_data['tot_fn'][ep])!=0)
-            # Update total loans and TPR observed so far
-            eval_data['tot_loans_over_time'][ep][t] = eval_data['tot_loans'][ep]
-            eval_data['tot_tpr_over_time'][ep][t] = eval_data['tot_tpr'][ep]
-
-            eval_data['tot_tp_over_time'][ep][t] = eval_data['tot_tp'][ep]
-            eval_data['tot_fp_over_time'][ep][t] = eval_data['tot_fp'][ep]
-            eval_data['tot_tn_over_time'][ep][t] = eval_data['tot_tn'][ep]
-            eval_data['tot_fn_over_time'][ep][t] = eval_data['tot_fn'][ep]
 
             old_bank_cash = env.state.bank_cash
 
@@ -166,19 +128,28 @@ def evaluate(env, agent, num_eps, num_timesteps, name, seeds, eval_path, algorit
 
             r = reward_fn(old_bank_cash=old_bank_cash,
                           bank_cash=bank_cash,
-                          tpr=eval_data['tot_tpr'][ep],
-                          zeta0=EVAL_ZETA_0,
-                          zeta1=EVAL_ZETA_1)
-
-            eval_data['tot_rews_over_time'][ep][t] = r
-            eval_data['tot_bank_cash_over_time'][ep][t] = bank_cash
-
+                          tpr=np.zeros(2,),#eval_data['tot_tpr'][ep],
+                          zeta0=1,
+                          zeta1=0)
+            
+            eval_data.append({
+                "ep" : ep,
+                "t" : t,
+                "group_id" : group_id,
+                "action" : action,
+                "bank_cash" : bank_cash,
+                "mu0" : env.mu[0],
+                "mu1" : env.mu[1],
+                "delta" : env.delta,
+                "delta_real" : env.delta_real,
+            })
+        
             if done:
                 break
 
     Path(f'{eval_path}/{name}/').mkdir(parents=True, exist_ok=True)
-    for key in eval_data.keys():
-        np.save(f'{eval_path}/{name}/{key}.npy', eval_data[key])
+    eval_data = pd.DataFrame(eval_data)
+    eval_data.to_csv(f'{eval_path}/{name}/eval_data.csv', index=False)
 
     return eval_data
 
@@ -219,7 +190,8 @@ def main():
         assert(args.eval_path is not None)
         p = Path(args.eval_path)
         if p.exists():
-            resp = input(f'{args.eval_path} already exists; do you want to override it? (y/n): ')
+            #resp = input(f'{args.eval_path} already exists; do you want to override it? (y/n): ')
+            resp = "y" # HARD CODED
             if resp != 'y':
                 exit('Exiting.')
 
@@ -228,7 +200,7 @@ def main():
         Path(args.eval_path).mkdir(parents=True, exist_ok=True)
 
         # Get random seeds
-        eval_eps = 10
+        eval_eps = 5
         eval_timesteps = 10000
         seeds = [random.randint(0, 10000) for _ in range(eval_eps)]
 

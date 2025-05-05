@@ -2,7 +2,7 @@ import gym
 import numpy as np
 import torch
 from gym import spaces
-
+from collections import deque
 
 class PPOEnvWrapper(gym.Wrapper):
     def __init__(self,
@@ -17,7 +17,7 @@ class PPOEnvWrapper(gym.Wrapper):
         self.observation_space = spaces.Box(
             low=np.inf,
             high=np.inf,
-            # (7) OHE of credit score + (2) group +    (2) TPRs of each group
+            # (7) OHE of credit score + (2) group +    (2) mu of each group
             shape=(env.observation_space['applicant_features'].shape[0] + 2 * env.state.params.num_groups,),
         )
 
@@ -31,14 +31,18 @@ class PPOEnvWrapper(gym.Wrapper):
         self.zeta_0 = zeta_0
         self.zeta_1 = zeta_1
 
-        self.tp = np.zeros(self.env.state.params.num_groups,)
-        self.fp = np.zeros(self.env.state.params.num_groups,)
-        self.tn = np.zeros(self.env.state.params.num_groups,)
-        self.fn = np.zeros(self.env.state.params.num_groups,)
-        self.tpr = np.zeros(self.env.state.params.num_groups,)
         self.delta = np.zeros(1, )
         self.old_bank_cash = 0
         self.delta_delta = 0
+
+        # my addition
+        self.window = 50
+        self.y_real_hist = [deque(maxlen=self.window) for _ in range(2)]
+        self.y_pred_hist = [deque(maxlen=self.window) for _ in range(2)]
+        self.a_hist = [deque(maxlen=self.window) for _ in range(2)]
+        self.pred = 0
+        self.mu = np.zeros(2,)
+        self.mu_real = np.zeros(2,)
 
     def process_observation(self, obs):
         credit_score = obs['applicant_features']
@@ -47,55 +51,52 @@ class PPOEnvWrapper(gym.Wrapper):
         return np.concatenate(
             (credit_score,
              group,
-             self.tpr,
+             self.mu,
              ),
             axis=0
         )
 
-    def compute_tpr(self, tp, fn):
-        # tp: true positive, 2-dimensional for 2 groups
-        # fn: false negative, 2-dimensional for 2 groups
-        return np.divide(
-            tp,
-            tp + fn,
-            out=np.zeros_like(tp),
-            where=(tp + fn) != 0)
-
+    
     def reset(self):
         self.timestep = 0
-        self.tp = np.zeros(self.env.state.params.num_groups,)
-        self.fp = np.zeros(self.env.state.params.num_groups,)
-        self.tn = np.zeros(self.env.state.params.num_groups,)
-        self.fn = np.zeros(self.env.state.params.num_groups,)
-        self.tpr = np.zeros(self.env.state.params.num_groups,)
         self.delta = np.zeros(1, )
         self.old_bank_cash = 0
-        self.delta_delta = 0
+        self.delta_delta = 0    
+
+
+        # my addiition
+        self.y_real_hist = [deque(maxlen=self.window) for _ in range(2)]
+        self.y_pred_hist = [deque(maxlen=self.window) for _ in range(2)]
+        self.a_hist = [deque(maxlen=self.window) for _ in range(2)]
+        self.pred = 0
+        self.mu = np.zeros(2,)
+        self.mu_real = np.zeros(2,)
 
         return self.process_observation(self.env.reset())
+    
+    def compute_mu(self):
+        for i in range(2):
+            self.mu_real[i] = np.mean(self.y_real_hist[i]) if len(self.y_real_hist[i]) > 0 else 1
+            self.mu[i] = np.mean(self.y_pred_hist[i]) if len(self.y_pred_hist[i]) > 0 else 1
 
     def step(self, action):
         old_delta = self.delta
 
         # Update instance variables before we step the environment
         group_id = np.argmax(self.env.state.group)
-        if action == 1:
-            # Check if agent would default
-            if self.env.state.will_default:
-                self.fp[group_id] += 1
-            else:
-                self.tp[group_id] += 1
-        elif action == 0:
-            if self.env.state.will_default:
-                self.tn[group_id] += 1
-            else:
-                self.fn[group_id] += 1
-        self.tpr = self.compute_tpr(tp=self.tp,
-                                                                fn=self.fn)
+        
         self.old_bank_cash = self.env.state.bank_cash
 
-        # Update delta terms
-        self.delta = np.abs(self.tpr[0] - self.tpr[1])
+
+        # my addition
+        pred = self.pred if action == 0 else 1 - self.env.state.will_default
+        self.y_real_hist[group_id].append(1 - self.env.state.will_default)
+        self.y_pred_hist[group_id].append(pred)
+        self.a_hist[group_id].append(action)
+        self.compute_mu()
+
+        self.delta = np.abs(self.mu[0] - self.mu[1])
+        self.delta_real = np.abs(self.mu_real[0] - self.mu_real[1])
         self.delta_delta = self.delta - old_delta
 
 
@@ -104,7 +105,7 @@ class PPOEnvWrapper(gym.Wrapper):
         r = self.reward_fn(
             old_bank_cash=self.old_bank_cash,
             bank_cash=self.env.state.bank_cash,
-            tpr=self.tpr,
+            tpr=self.mu,
             zeta0=self.zeta_0,
             zeta1=self.zeta_1
         )
