@@ -169,7 +169,12 @@ class OnPolicyAlgorithm(BaseAlgorithm):
                 # Convert to pytorch tensor or to TensorDict
                 obs_tensor = obs_as_tensor(self._last_obs, self.device)
                 actions, values, log_probs = self.policy(obs_tensor)
+                label_pred = self.policy.predict_label(obs_tensor)
             actions = actions.cpu().numpy()
+            label_pred = label_pred.cpu().numpy()
+
+            # workaround to pass pred to the env
+            env.set_attr("pred", label_pred)
 
             # Rescale and perform action
             clipped_actions = actions
@@ -209,8 +214,10 @@ class OnPolicyAlgorithm(BaseAlgorithm):
 
             delta = torch.tensor(np.array(env.get_attr('delta')))
             delta_delta = torch.tensor(np.array(env.get_attr('delta_delta')))
-
-            rollout_buffer.add(self._last_obs, actions, rewards, self._last_episode_starts, values, log_probs, delta, delta_delta)
+            state = env.get_attr("state")[0]
+            label = np.array([1 - state.will_default]).astype(np.float32)
+            group = np.array([state.group]).astype(np.float32)
+            rollout_buffer.add(self._last_obs, actions, label, group, rewards, self._last_episode_starts, values, log_probs, delta, delta_delta)
             self._last_obs = new_obs
             self._last_episode_starts = dones
 

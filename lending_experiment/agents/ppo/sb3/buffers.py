@@ -346,6 +346,8 @@ class RolloutBuffer(BaseBuffer):
 
         self.observations = np.zeros((self.buffer_size, self.n_envs) + self.obs_shape, dtype=np.float32)
         self.actions = np.zeros((self.buffer_size, self.n_envs, self.action_dim), dtype=np.float32)
+        self.labels = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
+        self.groups = np.zeros((self.buffer_size, self.n_envs, 2), dtype=np.float32)
         self.rewards = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
         self.returns = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
         self.episode_starts = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
@@ -394,6 +396,8 @@ class RolloutBuffer(BaseBuffer):
         self,
         obs: np.ndarray,
         action: np.ndarray,
+        label: np.ndarray,
+        group: np.ndarray,
         reward: np.ndarray,
         episode_start: np.ndarray,
         value: th.Tensor,
@@ -423,6 +427,8 @@ class RolloutBuffer(BaseBuffer):
 
         self.observations[self.pos] = np.array(obs).copy()
         self.actions[self.pos] = np.array(action).copy()
+        self.labels[self.pos] = np.array(label).copy()
+        self.groups[self.pos] = np.array(group).copy()
         self.rewards[self.pos] = np.array(reward).copy()
         self.episode_starts[self.pos] = np.array(episode_start).copy()
         self.values[self.pos] = value.clone().cpu().numpy().flatten()
@@ -442,6 +448,8 @@ class RolloutBuffer(BaseBuffer):
             _tensor_names = [
                 "observations",
                 "actions",
+                "labels",
+                "groups",
                 "values",
                 "log_probs",
                 "advantages",
@@ -467,6 +475,8 @@ class RolloutBuffer(BaseBuffer):
         data = (
             self.observations[batch_inds],
             self.actions[batch_inds],
+            self.labels[batch_inds],
+            self.groups[batch_inds],
             self.values[batch_inds].flatten(),
             self.log_probs[batch_inds].flatten(),
             self.advantages[batch_inds].flatten(),
