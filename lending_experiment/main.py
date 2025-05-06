@@ -80,8 +80,8 @@ def train(train_timesteps, env, config):
             "net_arch": [256, 256, dict(vf=[256, 128], pi=[256, 128])],
         },
         verbose=1,
-        learning_rate=config.algorithm.learning_rate,
-        device=device
+        device=device,
+        **config.algorithm
     )
 
     shutil.rmtree(save_dir, ignore_errors=True)
@@ -155,9 +155,9 @@ def evaluate(env, agent, num_eps, num_timesteps, name, seeds, eval_path):
             if done:
                 break
 
-    Path(f'{eval_path}/{name}/').mkdir(parents=True, exist_ok=True)
+    Path(f'{eval_path}').mkdir(parents=True, exist_ok=True)
     eval_data = pd.DataFrame(eval_data)
-    eval_data.to_csv(f'{eval_path}/{name}/eval_data.csv', index=False)
+    eval_data.to_csv(f'{eval_path}/eval_data.csv', index=False)
 
     return eval_data
 

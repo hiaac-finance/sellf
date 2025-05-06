@@ -96,6 +96,7 @@ class PPO(OnPolicyAlgorithm):
             seed: Optional[int] = None,
             device: Union[th.device, str] = "auto",
             _init_setup_model: bool = True,
+            **kwargs: Any,
     ):
 
         super(PPO, self).__init__(
@@ -193,6 +194,7 @@ class PPO(OnPolicyAlgorithm):
         entropy_losses = []
         pg_losses, value_losses = [], []
         clip_fractions = []
+        pred_losses, pred_losses_g0, pred_losses_g1 = [], [], []
 
         continue_training = True
 
@@ -215,6 +217,7 @@ class PPO(OnPolicyAlgorithm):
                 # Advantages shape: (batch_size,)
                 advantages = rollout_data.advantages
 
+                pred_loss = torch.Tensor([0.]).to(self.device)
                 # Advantage regularization for fairness here
                 if self.ad_reg == "pocar":
                     # Compute value-thresholding (vt) term as part of Eq. 3 from the paper
@@ -237,11 +240,35 @@ class PPO(OnPolicyAlgorithm):
 
                     # Add terms to advantages
                     advantages = (self.beta_0 * advantages + self.beta_1 * vt_term + self.beta_2 * div_term)
+                elif self.ad_reg == "sellf":
+                    g0_idx = (rollout_data.groups == 0).nonzero()[0]
+                    g1_idx = (rollout_data.groups == 1).nonzero()[0]
+                    probs = self.policy.prob_label(rollout_data.observations)
+                    pred_loss = F.binary_cross_entropy(probs, rollout_data.labels, reduction='none')
+                    pred_loss = pred_loss * (1 - actions)
+
+                    vt_term = torch.min(
+                        torch.zeros(rollout_data.deltas.shape[0]).to(self.device),
+                        -rollout_data.deltas + torch.tensor(self.omega, dtype=torch.float32)
+                    )
+
+                    vt_term = (vt_term - torch.min(vt_term)) / (torch.max(vt_term) - torch.min(vt_term) + 1e-8)
+                    advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+
+                    advantages = (self.beta_0 * advantages + self.beta_1 * vt_term)
+
+                    with th.no_grad():
+                        pred_losses_g0.append(pred_loss[g0_idx].mean().item())
+                        pred_losses_g1.append(pred_loss[g1_idx].mean().item())
+                        prob_loan = self.policy.prob_loan(rollout_data.observations)
+                    pred_loss = (pred_loss / prob_loan)
+                    pred_loss = pred_loss.mean()
 
                 # Normalize advantage
                 if self.normalize_advantage:
                     advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
+                pred_losses.append(pred_loss.item())
 
                 # ratio between old and new policy, should be one at the first iteration
                 ratio = th.exp(log_prob - rollout_data.old_log_prob)
@@ -278,7 +305,7 @@ class PPO(OnPolicyAlgorithm):
 
                 entropy_losses.append(entropy_loss.item())
 
-                loss = policy_loss + self.ent_coef * entropy_loss + self.vf_coef * value_loss
+                loss = policy_loss + self.ent_coef * entropy_loss + self.vf_coef * value_loss + 0.5 * pred_loss
 
                 # Calculate approximate form of reverse KL Divergence for early stopping
                 # see issue #417: https://github.com/DLR-RM/stable-baselines3/issues/417
@@ -316,6 +343,11 @@ class PPO(OnPolicyAlgorithm):
         self.logger.record("train/clip_fraction", np.mean(clip_fractions))
         self.logger.record("train/loss", loss.item())
         self.logger.record("train/explained_variance", explained_var)
+        self.logger.record("train/pred_loss", np.mean(pred_losses))
+        self.logger.record("train/pred_loss_g0", np.mean(pred_losses_g0))
+        self.logger.record("train/pred_loss_g1", np.mean(pred_losses_g1))
+        self.logger.record("train/accept_rate", np.mean(rollout_data.actions))
+        self.logger.record("train/pos_rate", np.mean(rollout_data.labels))
         if hasattr(self.policy, "log_std"):
             self.logger.record("train/std", th.exp(self.policy.log_std).mean().item())
 
