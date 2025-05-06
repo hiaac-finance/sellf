@@ -76,6 +76,7 @@ def train(train_timesteps, env, config):
         "MlpPolicy", 
         env,
         policy_kwargs={
+            "use_predictor": config.policy.use_predictor,
             "activation_fn": torch.nn.ReLU,
             "net_arch": [256, 256, dict(vf=[256, 128], pi=[256, 128])],
         },
@@ -122,10 +123,14 @@ def evaluate(env, agent, num_eps, num_timesteps, name, seeds, eval_path):
                 action = agent.predict(obs)[0]
             else:
                 action = agent.act(obs, done)
+            obs = np.array(obs).reshape(1, -1)
+            obs = torch.tensor(obs, dtype=torch.float32).to(device)
+            pred = agent.policy.predict_label(obs).item()
 
             # Logging
             group_id = np.argmax(env.state.group)
             # Add to loans if the agent wants to loan
+            label = 1 - env.state.will_default
 
 
             old_bank_cash = env.state.bank_cash
@@ -145,6 +150,9 @@ def evaluate(env, agent, num_eps, num_timesteps, name, seeds, eval_path):
                 "t" : t,
                 "group_id" : group_id,
                 "action" : action,
+                "label" : label,
+                "pred" : pred,
+                "correct" : int(label == pred),
                 "bank_cash" : bank_cash,
                 "mu0" : env.mu[0],
                 "mu1" : env.mu[1],
@@ -155,9 +163,32 @@ def evaluate(env, agent, num_eps, num_timesteps, name, seeds, eval_path):
             if done:
                 break
 
+                
+    predictions = []
+    # calculate the output of the predictor net
+    for g in range(2):
+        for x in range(7):
+            # transform g to one hot encode
+            g_ = np.zeros(2)
+            g_[g] = 1
+            x_ = np.zeros(7)
+            x_[x] = 1
+            obs = np.concatenate([x_, g_])
+            obs = np.expand_dims(obs, axis=0)
+            obs = torch.tensor(obs, dtype=torch.float32).to(device)
+            pred = agent.policy.prob_label(obs).cpu().detach().numpy()
+            predictions.append({
+                "g": g,
+                "x": x,
+                "pred" : pred.item()
+            })
+
     Path(f'{eval_path}').mkdir(parents=True, exist_ok=True)
     eval_data = pd.DataFrame(eval_data)
     eval_data.to_csv(f'{eval_path}/eval_data.csv', index=False)
+
+    predictions = pd.DataFrame(predictions)
+    predictions.to_csv(f'{eval_path}/predictions.csv', index=False)
 
     return eval_data
 
@@ -210,7 +241,7 @@ def main():
 
     # Get random seeds
     eval_eps = 5
-    eval_timesteps = 10000
+    eval_timesteps = 10_000
     seeds = [random.randint(0, 10000) for _ in range(eval_eps)]
 
     with open(eval_path + '/seeds.txt', 'w') as f:
