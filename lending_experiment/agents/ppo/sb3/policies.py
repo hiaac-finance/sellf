@@ -75,6 +75,7 @@ class PredActorCriticPolicy(ActorCriticPolicy):
         lr_schedule: Schedule,
         net_arch: Optional[List[Union[int, Dict[str, List[int]]]]] = None,
         activation_fn: Type[nn.Module] = nn.Tanh,
+        use_predictor: bool = False,
         ortho_init: bool = True,
         use_sde: bool = False,
         log_std_init: float = 0.0,
@@ -87,7 +88,8 @@ class PredActorCriticPolicy(ActorCriticPolicy):
         normalize_images: bool = True,
         optimizer_class: Type[th.optim.Optimizer] = th.optim.Adam,
         optimizer_kwargs: Optional[Dict[str, Any]] = None,
-    ):
+    ):  
+        self.use_predictor = use_predictor
         super(PredActorCriticPolicy, self).__init__(
             observation_space,
             action_space,
@@ -133,13 +135,20 @@ class PredActorCriticPolicy(ActorCriticPolicy):
             raise NotImplementedError(f"Unsupported distribution '{self.action_dist}'.")
 
         self.value_net = nn.Linear(self.mlp_extractor.latent_dim_vf, 1)
-        self.predictor_net = nn.Sequential(
-            nn.Linear(self.features_dim, 128),
-            nn.ReLU(),
-            nn.Linear(128, 128),
-            nn.ReLU(),
-            nn.Linear(128, 1),
-        )
+        if self.use_predictor:
+            self.predictor_net = nn.Sequential(
+                nn.Linear(self.features_dim - 2, 64),
+                nn.BatchNorm1d(64),
+                nn.ReLU(),
+                nn.Dropout(0.5),
+                nn.Linear(64, 32),
+                nn.BatchNorm1d(32),
+                nn.ReLU(),
+                nn.Dropout(0.5),
+                nn.Linear(32, 1),
+                nn.Sigmoid(),
+            )
+
         # Init weights: use orthogonal initialization
         # with small initial weight for the output
         if self.ortho_init:
@@ -152,14 +161,16 @@ class PredActorCriticPolicy(ActorCriticPolicy):
                 self.mlp_extractor: np.sqrt(2),
                 self.action_net: 0.01,
                 self.value_net: 1,
-                self.predictor_net: 1
             }
             for module, gain in module_gains.items():
                 module.apply(partial(self.init_weights, gain=gain))
 
-        # Setup optimizer with initial learning rate
-        self.optimizer = self.optimizer_class(self.parameters(), lr=lr_schedule(1), **self.optimizer_kwargs)
-
+        self.optimizer = self.optimizer_class(
+            self.parameters(),
+            lr=lr_schedule(1),
+            **self.optimizer_kwargs,
+        )
+ 
     
     def prob_loan(self, obs: th.Tensor) -> Tuple[th.Tensor, th.Tensor]:
         """
@@ -184,9 +195,13 @@ class PredActorCriticPolicy(ActorCriticPolicy):
         :param obs:
         :return: probability of loans
         """
+        if not self.use_predictor:
+            return th.zeros((obs.shape[0]), dtype=th.float32, device=self.device)
         # Preprocess the observation if needed
         features = self.extract_features(obs)
-        return th.sigmoid(self.predictor_net(features))
+        if obs.shape[1] == self.features_dim:
+            features = features[:, :-2]
+        return self.predictor_net(features)
     
     def predict_label(self, obs: th.Tensor) -> Tuple[th.Tensor]:
         """
@@ -195,8 +210,13 @@ class PredActorCriticPolicy(ActorCriticPolicy):
         :param obs:
         :return: probability of loans
         """
+        if not self.use_predictor:
+            return th.zeros((obs.shape[0]), dtype=th.float32, device=self.device)
         # Preprocess the observation if needed
         features = self.extract_features(obs)
-        return (self.predictor_net(features) > 0.5).float()
+        if obs.shape[1] == self.features_dim:
+            features = features[:, :-2]
+        probs = self.predictor_net(features)
+        return (probs > 0.5).float()
 
 

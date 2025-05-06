@@ -182,6 +182,10 @@ class OnPolicyAlgorithm(BaseAlgorithm):
             if isinstance(self.action_space, gym.spaces.Box):
                 clipped_actions = np.clip(actions, self.action_space.low, self.action_space.high)
 
+            state = env.get_attr("state")[0]
+            label = np.array([1 - state.will_default]).astype(np.float32)
+            group = np.array([state.group]).astype(np.float32)
+            
             new_obs, rewards, dones, infos = env.step(clipped_actions)
 
             self.num_timesteps += env.num_envs
@@ -214,9 +218,7 @@ class OnPolicyAlgorithm(BaseAlgorithm):
 
             delta = torch.tensor(np.array(env.get_attr('delta')))
             delta_delta = torch.tensor(np.array(env.get_attr('delta_delta')))
-            state = env.get_attr("state")[0]
-            label = np.array([1 - state.will_default]).astype(np.float32)
-            group = np.array([state.group]).astype(np.float32)
+            
             rollout_buffer.add(self._last_obs, actions, label, group, rewards, self._last_episode_starts, values, log_probs, delta, delta_delta)
             self._last_obs = new_obs
             self._last_episode_starts = dones

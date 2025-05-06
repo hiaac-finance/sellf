@@ -191,6 +191,7 @@ class PPO(OnPolicyAlgorithm):
         if self.clip_range_vf is not None:
             clip_range_vf = self.clip_range_vf(self._current_progress_remaining)
 
+        pred_criterion = th.nn.BCELoss(reduction="none")
         entropy_losses = []
         pg_losses, value_losses = [], []
         clip_fractions = []
@@ -217,7 +218,6 @@ class PPO(OnPolicyAlgorithm):
                 # Advantages shape: (batch_size,)
                 advantages = rollout_data.advantages
 
-                pred_loss = torch.Tensor([0.]).to(self.device)
                 # Advantage regularization for fairness here
                 if self.ad_reg == "pocar":
                     # Compute value-thresholding (vt) term as part of Eq. 3 from the paper
@@ -244,8 +244,7 @@ class PPO(OnPolicyAlgorithm):
                     g0_idx = (rollout_data.groups == 0).nonzero()[0]
                     g1_idx = (rollout_data.groups == 1).nonzero()[0]
                     probs = self.policy.prob_label(rollout_data.observations)
-                    pred_loss = F.binary_cross_entropy(probs, rollout_data.labels, reduction='none')
-                    pred_loss = pred_loss * (1 - actions)
+                    pred_loss = pred_criterion(probs, rollout_data.labels)
 
                     vt_term = torch.min(
                         torch.zeros(rollout_data.deltas.shape[0]).to(self.device),
@@ -261,7 +260,8 @@ class PPO(OnPolicyAlgorithm):
                         pred_losses_g0.append(pred_loss[g0_idx].mean().item())
                         pred_losses_g1.append(pred_loss[g1_idx].mean().item())
                         prob_loan = self.policy.prob_loan(rollout_data.observations)
-                    pred_loss = (pred_loss / prob_loan)
+                    #pred_loss = (pred_loss / prob_loan) # TODO VERIFY THIS LINE
+                    #pred_loss = pred_loss[actions.nonzero()].mean()
                     pred_loss = pred_loss.mean()
 
                 # Normalize advantage
@@ -346,8 +346,8 @@ class PPO(OnPolicyAlgorithm):
         self.logger.record("train/pred_loss", np.mean(pred_losses))
         self.logger.record("train/pred_loss_g0", np.mean(pred_losses_g0))
         self.logger.record("train/pred_loss_g1", np.mean(pred_losses_g1))
-        self.logger.record("train/accept_rate", np.mean(rollout_data.actions))
-        self.logger.record("train/pos_rate", np.mean(rollout_data.labels))
+        self.logger.record("train/accept_rate", np.mean(self.rollout_buffer.actions.flatten()))
+        self.logger.record("train/pos_rate", np.mean(self.rollout_buffer.labels.flatten()))
         if hasattr(self.policy, "log_std"):
             self.logger.record("train/std", th.exp(self.policy.log_std).mean().item())
 
