@@ -1,6 +1,6 @@
 general:
   seed: 2025
-  algorithm: sellf
+  algorithm: ppo
   exp_dir: ./experiments
   n_seeds: 1
   env_name: "yu2022"
@@ -14,12 +14,12 @@ environment:
 algorithm:
   train_timesteps: 500_000
   eval_timesteps: 50_000
-  ad_reg: "sellf"
+  ad_reg: "none"
   learning_rate: 1e-5
 
 
 policy:
-  use_predictor: true
+  use_predictor: false
   activation_fn: ReLU
   net_arch:
     - 256

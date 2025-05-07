@@ -57,6 +57,43 @@ def get_env(env_name: str):
             cluster_shift_increment=0.01,
         )
         env = DelayedImpactEnv(env_params)
+    elif env_name == "yu2022_hard":
+        env_params = DelayedImpactParams(
+            applicant_distribution=two_group_credit_clusters(
+                cluster_probabilities=[
+                    [0.0, 0.1, 0.1, 0.2, 0.3, 0.3, 0.0],
+                    [0.1, 0.1, 0.2, 0.3, 0.3, 0.0, 0.0],
+                ],
+                group_likelihoods=[0.7, 0.3],
+                success_probabilities=[
+                    [0.1, 0.2, 0.45, 0.6, 0.65, 0.7, 0.7], 
+                    [0.1, 0.1, 0.25, 0.4, 0.75, 0.8, 0.8]
+                ]
+            ),
+            bank_starting_cash=10_000,
+            interest_rate=1,
+            cluster_shift_increment=0.01,
+        )
+        env = DelayedImpactEnv(env_params)
+    elif env_name == "setting1_hard":
+        env_params = DelayedImpactParams(
+            applicant_distribution=two_group_credit_clusters(
+                cluster_probabilities=[
+                    (0.0, 0.0, 0.05, 0.05, 0.05, 0.05, 0.1, 0.1, 0.15, 0.15, 0.15, 0.15, 0.0, 0.0),
+	                (0.05, 0.05, 0.05, 0.05, 0.1, 0.1, 0.15, 0.15, 0.15, 0.15, 0.0, 0.0, 0.0, 0.0),  
+                ],
+                group_likelihoods=[0.5, 0.5],
+                success_probabilities=[
+                    (0.773, 0.804, 0.833, 0.857, 0.879, 0.898, 0.914, 0.928, 0.939, 0.949, 0.958, 0.965, 0.970, 0.975),
+                    (0.673, 0.704, 0.733, 0.757, 0.779, 0.798, 0.714, 0.728, 0.939, 0.949, 0.958, 0.965, 0.970, 0.975),
+                ]
+            ),
+            bank_starting_cash=10_000,
+            interest_rate=0.1,
+            cluster_shift_increment=0.01,
+        )
+        env = DelayedImpactEnv(env_params)
+
     return env
 
 
@@ -166,12 +203,12 @@ def evaluate(env, agent, num_eps, num_timesteps, name, seeds, eval_path):
                 
     predictions = []
     # calculate the output of the predictor net
-    for g in range(2):
-        for x in range(7):
+    for g in range(env.state.params.num_groups):
+        for x in range(env.env.observation_space['applicant_features'].shape[0]):
             # transform g to one hot encode
             g_ = np.zeros(2)
             g_[g] = 1
-            x_ = np.zeros(7)
+            x_ = np.zeros(env.env.observation_space['applicant_features'].shape[0])
             x_[x] = 1
             obs = np.concatenate([x_, g_])
             obs = np.expand_dims(obs, axis=0)

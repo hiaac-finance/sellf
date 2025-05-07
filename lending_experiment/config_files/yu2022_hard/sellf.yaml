@@ -3,7 +3,7 @@ general:
   algorithm: sellf
   exp_dir: ./experiments
   n_seeds: 1
-  env_name: "yu2022"
+  env_name: "yu2022_hard"
 
 environment:
   partial_observation: true

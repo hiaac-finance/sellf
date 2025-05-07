@@ -218,6 +218,8 @@ class PPO(OnPolicyAlgorithm):
                 # Advantages shape: (batch_size,)
                 advantages = rollout_data.advantages
 
+                pred_loss = torch.Tensor([0.]).to(self.device)
+
                 # Advantage regularization for fairness here
                 if self.ad_reg == "pocar":
                     # Compute value-thresholding (vt) term as part of Eq. 3 from the paper
@@ -260,8 +262,8 @@ class PPO(OnPolicyAlgorithm):
                         pred_losses_g0.append(pred_loss[g0_idx].mean().item())
                         pred_losses_g1.append(pred_loss[g1_idx].mean().item())
                         prob_loan = self.policy.prob_loan(rollout_data.observations)
-                    #pred_loss = (pred_loss / prob_loan) # TODO VERIFY THIS LINE
-                    #pred_loss = pred_loss[actions.nonzero()].mean()
+                    pred_loss = (pred_loss / prob_loan) # TODO VERIFY THIS LINE
+                    pred_loss = pred_loss[actions.nonzero()].mean()
                     pred_loss = pred_loss.mean()
 
                 # Normalize advantage

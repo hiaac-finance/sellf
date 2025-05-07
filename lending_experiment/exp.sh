@@ -1,0 +1,9 @@
+#python main.py config_files/yu2022/ppo.yaml
+#python main.py config_files/yu2022/pocar.yaml
+python main.py config_files/yu2022/sellf.yaml
+python main.py config_files/yu2022_hard/ppo.yaml
+python main.py config_files/yu2022_hard/pocar.yaml
+python main.py config_files/yu2022_hard/sellf.yaml
+python main.py config_files/setting1_hard/ppo.yaml
+python main.py config_files/setting1_hard/pocar.yaml
+python main.py config_files/setting1_hard/sellf.yaml
