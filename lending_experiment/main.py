@@ -18,6 +18,7 @@ import numpy as np
 import pandas as pd
 import torch
 import tqdm
+import pickle as pkl
 from absl import flags
 from stable_baselines3.common.callbacks import CheckpointCallback
 from stable_baselines3.common.logger import configure
@@ -91,6 +92,22 @@ def get_env(env_name: str):
             bank_starting_cash=10_000,
             interest_rate=0.1,
             cluster_shift_increment=0.01,
+        )
+        env = DelayedImpactEnv(env_params)
+
+    elif env_name == "fico":
+        with open("data/fico.pkl", "rb") as f:
+            data = pkl.load(f)
+
+        env_params = DelayedImpactParams(
+            applicant_distribution=two_group_credit_clusters(
+                cluster_probabilities=data["cluster_probabilities"],
+                group_likelihoods=data["group_likelihoods"],
+                success_probabilities=data["success_probabilities"]
+            ),
+            bank_starting_cash=10_000,
+            interest_rate=1,
+            cluster_shift_increment=1,
         )
         env = DelayedImpactEnv(env_params)
 
