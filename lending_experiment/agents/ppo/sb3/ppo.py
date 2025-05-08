@@ -73,7 +73,7 @@ class PPO(OnPolicyAlgorithm):
             ad_reg: str = "pocar",
             beta_0: float = 1.0,
             beta_1: float = 0.25,
-            beta_2: float = 0.25,
+            beta_2: float = 0.,
             omega: float = 0.005,
             n_steps: int = 2048,
             batch_size: int = 64,
@@ -196,6 +196,7 @@ class PPO(OnPolicyAlgorithm):
         pg_losses, value_losses = [], []
         clip_fractions = []
         pred_losses, pred_losses_g0, pred_losses_g1 = [], [], []
+        prob_loan_min, prob_loan_mean, prob_loan_max = [], [], []
 
         continue_training = True
 
@@ -243,8 +244,6 @@ class PPO(OnPolicyAlgorithm):
                     # Add terms to advantages
                     advantages = (self.beta_0 * advantages + self.beta_1 * vt_term + self.beta_2 * div_term)
                 elif self.ad_reg == "sellf":
-                    g0_idx = (rollout_data.groups == 0).nonzero()[0]
-                    g1_idx = (rollout_data.groups == 1).nonzero()[0]
                     probs = self.policy.prob_label(rollout_data.observations)
                     pred_loss = pred_criterion(probs, rollout_data.labels)
 
@@ -253,24 +252,39 @@ class PPO(OnPolicyAlgorithm):
                         -rollout_data.deltas + torch.tensor(self.omega, dtype=torch.float32)
                     )
 
+                    # increase advantage if the prediction was wrong
+                    error_term = pred_loss.clone().detach()
+
+                    # if it was denied, make it 0
+                    error_term = error_term * actions
+
                     vt_term = (vt_term - torch.min(vt_term)) / (torch.max(vt_term) - torch.min(vt_term) + 1e-8)
+                    error_term = (error_term - torch.min(error_term)) / (torch.max(error_term) - torch.min(error_term) + 1e-8)
                     advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
-                    advantages = (self.beta_0 * advantages + self.beta_1 * vt_term)
+                    advantages = (self.beta_0 * advantages + self.beta_1 * vt_term + self.beta_1 * error_term)
 
                     with th.no_grad():
+                        g0_idx = ((rollout_data.groups[:, 0] == 1) & (actions == 1)).nonzero()
+                        g1_idx = ((rollout_data.groups[:, 1] == 1) & (actions == 1)).nonzero()
+                        action_idx = (actions == 1).nonzero()
                         pred_losses_g0.append(pred_loss[g0_idx].mean().item())
                         pred_losses_g1.append(pred_loss[g1_idx].mean().item())
+                        pred_losses.append(pred_loss[action_idx].mean().item())
                         prob_loan = self.policy.prob_loan(rollout_data.observations)
+                        prob_loan_min.append(prob_loan.min().item())
+                        prob_loan_max.append(prob_loan.max().item())
+                        prob_loan_mean.append(prob_loan.mean().item())
+                        # clip
+                        #prob_loan = th.clamp(prob_loan, min=1e-5, max=1 - 1e-5)
                     pred_loss = (pred_loss / prob_loan) # TODO VERIFY THIS LINE
-                    pred_loss = pred_loss[actions.nonzero()].mean()
+                    pred_loss = pred_loss[action_idx].mean() # TODO VERIFY THIS LINE
                     pred_loss = pred_loss.mean()
 
                 # Normalize advantage
                 if self.normalize_advantage:
                     advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
-                pred_losses.append(pred_loss.item())
 
                 # ratio between old and new policy, should be one at the first iteration
                 ratio = th.exp(log_prob - rollout_data.old_log_prob)
@@ -350,6 +364,9 @@ class PPO(OnPolicyAlgorithm):
         self.logger.record("train/pred_loss_g1", np.mean(pred_losses_g1))
         self.logger.record("train/accept_rate", np.mean(self.rollout_buffer.actions.flatten()))
         self.logger.record("train/pos_rate", np.mean(self.rollout_buffer.labels.flatten()))
+        self.logger.record("train/prob_loan_min", np.mean(prob_loan_min))
+        self.logger.record("train/prob_loan_mean", np.mean(prob_loan_mean))
+        self.logger.record("train/prob_loan_max", np.mean(prob_loan_max))
         if hasattr(self.policy, "log_std"):
             self.logger.record("train/std", th.exp(self.policy.log_std).mean().item())
 
