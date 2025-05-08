@@ -262,7 +262,7 @@ class PPO(OnPolicyAlgorithm):
                     error_term = (error_term - torch.min(error_term)) / (torch.max(error_term) - torch.min(error_term) + 1e-8)
                     advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
-                    advantages = (self.beta_0 * advantages + self.beta_1 * vt_term + self.beta_1 * error_term)
+                    advantages = (self.beta_0 * advantages + self.beta_1 * vt_term + self.beta_2 * error_term)
 
                     with th.no_grad():
                         g0_idx = ((rollout_data.groups[:, 0] == 1) & (actions == 1)).nonzero()

@@ -106,7 +106,7 @@ def get_env(env_name: str):
                 success_probabilities=data["success_probabilities"]
             ),
             bank_starting_cash=10_000,
-            interest_rate=1,
+            interest_rate=0.1,
             cluster_shift_increment=0.01,
         )
         env = DelayedImpactEnv(env_params)
@@ -201,6 +201,7 @@ def evaluate(env, agent, num_eps, num_timesteps, name, seeds, eval_path):
             # Add to loans if the agent wants to loan
             label = 1 - env.state.will_default
 
+            env.pred = pred
 
             old_bank_cash = env.state.bank_cash
 
