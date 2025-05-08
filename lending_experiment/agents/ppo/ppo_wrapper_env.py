@@ -9,6 +9,7 @@ class PPOEnvWrapper(gym.Wrapper):
         env,
         reward_fn,
         ep_timesteps=2000,
+        mu_type = "qualification",
         zeta_0 = 1,
         zeta_1 = 0,
     ):
@@ -28,6 +29,7 @@ class PPOEnvWrapper(gym.Wrapper):
 
         self.timestep = 0
         self.ep_timesteps = ep_timesteps
+        self.mu_type = mu_type
         self.zeta_0 = zeta_0
         self.zeta_1 = zeta_1
 
@@ -36,7 +38,7 @@ class PPOEnvWrapper(gym.Wrapper):
         self.delta_delta = 0
 
         # my addition
-        self.window = 50
+        self.window = 200
         self.y_real_hist = [deque(maxlen=self.window) for _ in range(2)]
         self.y_pred_hist = [deque(maxlen=self.window) for _ in range(2)]
         self.a_hist = [deque(maxlen=self.window) for _ in range(2)]
@@ -75,9 +77,18 @@ class PPOEnvWrapper(gym.Wrapper):
         return self.process_observation(self.env.reset())
     
     def compute_mu(self):
-        for i in range(2):
-            self.mu_real[i] = np.mean(self.y_real_hist[i]) if len(self.y_real_hist[i]) > 0 else 1
-            self.mu[i] = np.mean(self.y_pred_hist[i]) if len(self.y_pred_hist[i]) > 0 else 1
+        if self.mu_type == "qualification":
+            for i in range(2):
+                self.mu_real[i] = np.mean(self.y_real_hist[i]) if len(self.y_real_hist[i]) > 0 else 1
+                self.mu[i] = np.mean(self.y_pred_hist[i]) if len(self.y_pred_hist[i]) > 0 else 1
+        elif self.mu_type == "accuracy":
+            for i in range(2):
+                y_real = np.array(self.y_real_hist[i])
+                y_pred = np.array(self.y_pred_hist[i])
+                action = np.array(self.a_hist[i])
+                self.mu_real[i] = np.mean(y_real == action) if len(y_real) > 0 else 1
+                self.mu[i] = np.mean(y_pred == action) if len(y_pred) > 0 else 1
+
 
     def step(self, action):
         old_delta = self.delta

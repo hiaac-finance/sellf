@@ -29,7 +29,7 @@ from yaml import full_load
 import sys; sys.path.append('..')
 
 from lending_experiment.environments import params, rewards
-from lending_experiment.environments.lending import DelayedImpactEnv
+from lending_experiment.environments.lending import DelayedImpactEnv, EnemEnv
 from lending_experiment.environments.lending_params import DelayedImpactParams, two_group_credit_clusters
 from lending_experiment.environments.rewards import LendingReward
 from lending_experiment.agents.ppo.ppo_wrapper_env import PPOEnvWrapper
@@ -107,10 +107,25 @@ def get_env(env_name: str):
             ),
             bank_starting_cash=10_000,
             interest_rate=1,
-            cluster_shift_increment=1,
+            cluster_shift_increment=0.01,
         )
         env = DelayedImpactEnv(env_params)
 
+    elif env_name == "enem":
+        with open("data/enem.pkl", "rb") as f:
+            data = pkl.load(f)
+
+        env_params = DelayedImpactParams(
+            applicant_distribution=two_group_credit_clusters(
+                cluster_probabilities=data["cluster_probabilities"],
+                group_likelihoods=data["group_likelihoods"],
+                success_probabilities=data["success_probabilities"]
+            ),
+            bank_starting_cash=10_000,
+            interest_rate=10,
+            cluster_shift_increment=0.01,
+        )
+        env = EnemEnv(env_params)
     return env
 
 
@@ -121,7 +136,7 @@ def train(train_timesteps, env, config):
 
     print('env_params: ', env.state.params)
 
-    env = PPOEnvWrapper(env=env, reward_fn=LendingReward)
+    env = PPOEnvWrapper(env=env, reward_fn=LendingReward, mu_type=config.environment.mu_type)
     env = Monitor(env)
     env = DummyVecEnv([lambda: env])
 
@@ -312,7 +327,7 @@ def main():
     name = config.general.algorithm
     agent = PPO.load(model_path, verbose=1)
     evaluate(
-        env=PPOEnvWrapper(env=env, reward_fn=LendingReward, ep_timesteps=eval_timesteps),
+        env=PPOEnvWrapper(env=env, reward_fn=LendingReward, ep_timesteps=eval_timesteps, mu_type=config.environment.mu_type),
         agent=agent,
         num_eps=eval_eps,
         num_timesteps=eval_timesteps,
@@ -320,6 +335,12 @@ def main():
         seeds=seeds,
         eval_path=eval_path
     )
+
+    with open("log.txt", "a") as f:
+        f.write(f"Environment: {config.general.env_name}\n")
+        f.write(f"Algorithm: {config.general.algorithm}\n")
+        f.write(f"Train Timesteps: {config.algorithm.train_timesteps}\n")
+        f.write("\n")
 
 
 if __name__ == '__main__':
