@@ -9,6 +9,7 @@ import os
 import random
 import shutil
 from pathlib import Path
+import time
 from omegaconf import OmegaConf
 
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
@@ -102,11 +103,12 @@ def get_env(env_name: str):
         env_params = DelayedImpactParams(
             applicant_distribution=two_group_credit_clusters(
                 cluster_probabilities=data["cluster_probabilities"],
-                group_likelihoods=data["group_likelihoods"],
+                #group_likelihoods=data["group_likelihoods"],
+                group_likelihoods=[0.5, 0.5],
                 success_probabilities=data["success_probabilities"]
             ),
             bank_starting_cash=10_000,
-            interest_rate=0.1,
+            interest_rate=0.25,
             cluster_shift_increment=0.01,
         )
         env = DelayedImpactEnv(env_params)
@@ -149,7 +151,7 @@ def train(train_timesteps, env, config):
             "activation_fn": torch.nn.ReLU,
             "net_arch": [256, 256, dict(vf=[256, 128], pi=[256, 128])],
         },
-        verbose=1,
+        verbose=0,
         device=device,
         **config.algorithm
     )
@@ -290,7 +292,7 @@ def main():
     
     config = validate_config(config)
 
-
+    start = time.time()
     env = get_env(config.general.env_name)
     train(train_timesteps=config.algorithm.train_timesteps, env=env, config=config)
     #    plot_rets(exp_path=EXP_DIR, save_png=True)
@@ -337,10 +339,12 @@ def main():
         eval_path=eval_path
     )
 
+    end = time.time()
     with open("log.txt", "a") as f:
         f.write(f"Environment: {config.general.env_name}\n")
         f.write(f"Algorithm: {config.general.algorithm}\n")
         f.write(f"Train Timesteps: {config.algorithm.train_timesteps}\n")
+        f.write(f"Took: {(end - start) / 60} minutes\n")
         f.write("\n")
 
 

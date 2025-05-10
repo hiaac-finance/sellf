@@ -1,6 +1,7 @@
 import time
 from typing import Any, Dict, List, Optional, Tuple, Type, Union
 
+from tqdm import tqdm
 import gym
 import numpy as np
 import torch
@@ -14,8 +15,8 @@ from stable_baselines3.common.type_aliases import GymEnv, MaybeCallback, Schedul
 from stable_baselines3.common.utils import obs_as_tensor, safe_mean
 from stable_baselines3.common.vec_env import VecEnv
 
-from agents.ppo.sb3.buffers import RolloutBuffer
-from agents.ppo.sb3.policies import PredActorCriticPolicy
+from agents.ppo.sb3.buffers import RolloutBuffer, ReplayMemory
+from agents.ppo.sb3.policies import PredActorCriticPolicy, PredPolicy
 
 
 class OnPolicyAlgorithm(BaseAlgorithm):
@@ -120,13 +121,32 @@ class OnPolicyAlgorithm(BaseAlgorithm):
             gae_lambda=self.gae_lambda,
             n_envs=self.n_envs,
         )
-        self.policy = PredActorCriticPolicy(  # pytype:disable=not-instantiable
+
+        self.memory = ReplayMemory(
+            self.n_steps,
             self.observation_space,
             self.action_space,
-            self.lr_schedule,
-            use_sde=self.use_sde,
-            **self.policy_kwargs  # pytype:disable=not-instantiable
+            device=self.device,
         )
+        if "rrm" in self.policy_kwargs and self.policy_kwargs["rrm"]:
+            policy_kwargs = self.policy_kwargs.copy()
+            del policy_kwargs["rrm"]
+            self.policy = PredPolicy( 
+                self.observation_space,
+                self.action_space,
+                self.lr_schedule,
+                use_sde=self.use_sde,
+                **policy_kwargs  
+            )
+
+        else:
+            self.policy = PredActorCriticPolicy( 
+                self.observation_space,
+                self.action_space,
+                self.lr_schedule,
+                use_sde=self.use_sde,
+                **self.policy_kwargs
+            )
         self.policy = self.policy.to(self.device)
 
     def collect_rollouts(
@@ -260,6 +280,8 @@ class OnPolicyAlgorithm(BaseAlgorithm):
 
         callback.on_training_start(locals(), globals())
 
+        pbar = tqdm(total = total_timesteps)
+
         while self.num_timesteps < total_timesteps:
 
             continue_training = self.collect_rollouts(self.env, callback, self.rollout_buffer, n_rollout_steps=self.n_steps)
@@ -283,6 +305,8 @@ class OnPolicyAlgorithm(BaseAlgorithm):
                 self.logger.dump(step=self.num_timesteps)
 
             self.train()
+
+            pbar.update(self.n_steps)
 
         callback.on_training_end()
 

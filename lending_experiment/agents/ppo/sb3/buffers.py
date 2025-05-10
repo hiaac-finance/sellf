@@ -14,6 +14,7 @@ from agents.ppo.sb3.type_aliases import (
     DictRolloutBufferSamples,
     ReplayBufferSamples,
     RolloutBufferSamples,
+    ReplayMemorySamples
 )
 
 try:
@@ -774,3 +775,86 @@ class DictRolloutBuffer(RolloutBuffer):
             advantages=self.to_torch(self.advantages[batch_inds].flatten()),
             returns=self.to_torch(self.returns[batch_inds].flatten()),
         )
+    
+
+class ReplayMemory(BaseBuffer):
+    def __init__(
+        self,
+        buffer_size: int,
+        observation_space: spaces.Space,
+        action_space: spaces.Space,
+        device: Union[th.device, str] = "cpu",
+        n_envs: int = 1,
+    ):  
+        super(ReplayMemory, self).__init__(buffer_size, observation_space, action_space, device, n_envs=n_envs)
+        self.n_envs = n_envs
+        self.observation_space = observation_space
+        self.buffer_size = buffer_size
+        self.generator_ready = False
+        self.reset()
+
+    def reset(self) -> None:
+        self.observations = np.zeros((self.buffer_size, self.n_envs) + self.obs_shape, dtype=np.float32)
+        self.labels = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
+        self.groups = np.zeros((self.buffer_size, self.n_envs, 2), dtype=np.float32)
+        self.probs = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
+        self.pos = 0
+
+    def add(self, obs: np.ndarray, label: np.ndarray, group: np.ndarray, prob: np.ndarray) -> None:
+        if isinstance(self.observation_space, spaces.Discrete):
+            obs = obs.reshape((self.n_envs,) + self.obs_shape)
+
+        # this function should concatenate the old and the new data, and 
+        # sample the new data to the original size
+
+        print(self.observations.shape, obs.shape)
+        self.observations = np.concatenate((self.observations, obs), axis=0)
+        self.labels = np.concatenate((self.labels, label), axis=0)
+        self.groups = np.concatenate((self.groups, group), axis=0)
+        self.probs = np.concatenate((self.probs, prob.reshape(-1, 1)), axis=0)
+
+        if self.observations.shape[0] > self.buffer_size:
+            # sample to return to the original size
+            indices = np.random.choice(
+                self.observations.shape[0], size=self.buffer_size, replace=False
+            )
+            self.observations = self.observations[indices]
+            self.labels = self.labels[indices]
+            self.groups = self.groups[indices]
+            self.probs = self.probs[indices]
+
+
+    def get(self, batch_size: Optional[int] = None) -> Generator[ReplayMemorySamples, None, None]:
+        # Sample random indices
+        indices = np.random.permutation(self.buffer_size * self.n_envs)
+        # Prepare the data
+        if not self.generator_ready:
+
+            _tensor_names = [
+                "observations",
+                "labels",
+                "groups",
+                "probs",
+            ]
+
+            for tensor in _tensor_names:
+                self.__dict__[tensor] = self.swap_and_flatten(self.__dict__[tensor])
+            self.generator_ready = True
+
+        # Return everything, don't create minibatches
+        if batch_size is None:
+            batch_size = self.buffer_size * self.n_envs
+
+        start_idx = 0
+        while start_idx < self.buffer_size * self.n_envs:
+            yield self._get_samples(indices[start_idx : start_idx + batch_size])
+            start_idx += batch_size
+
+    def _get_samples(self, batch_inds: np.ndarray, env: Optional[VecNormalize] = None) -> ReplayMemorySamples:
+        data = (
+            self.observations[batch_inds],
+            self.labels[batch_inds],
+            self.groups[batch_inds],
+            self.probs[batch_inds],
+        )
+        return ReplayMemorySamples(*tuple(map(self.to_torch, data)))

@@ -12,10 +12,11 @@ environment:
   mu_type: "qualification"
 
 algorithm:
-  train_timesteps: 1_000_000
+  train_timesteps: 250_000
   eval_timesteps: 50_000
   ad_reg: "sellf"
   learning_rate: 1e-5
+  beta_2: 0.5
 
 
 policy:

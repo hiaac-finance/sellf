@@ -1,9 +1,9 @@
 general:
   seed: 2025
-  algorithm: sellf
+  algorithm: rrm
   exp_dir: ./experiments
   n_seeds: 1
-  env_name: "yu2022_easy"
+  env_name: "fico"
 
 environment:
   partial_observation: true
@@ -12,13 +12,14 @@ environment:
   mu_type: "qualification"
 
 algorithm:
-  train_timesteps: 250_000
+  train_timesteps: 1_000_000
   eval_timesteps: 50_000
   ad_reg: "sellf"
   learning_rate: 1e-5
 
 
 policy:
+  rrm: true
   use_predictor: true
   activation_fn: ReLU
   net_arch:

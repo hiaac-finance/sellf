@@ -33,6 +33,11 @@ class RolloutBufferSamples(NamedTuple):
     deltas: th.Tensor
     delta_deltas: th.Tensor
 
+class ReplayMemorySamples(NamedTuple):
+    observations: th.Tensor
+    labels: th.Tensor
+    groups: th.Tensor
+    probs: th.Tensor
 
 class DictRolloutBufferSamples(RolloutBufferSamples):
     observations: TensorDict
