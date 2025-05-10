@@ -794,24 +794,26 @@ class ReplayMemory(BaseBuffer):
         self.reset()
 
     def reset(self) -> None:
-        self.observations = np.zeros((self.buffer_size, self.n_envs) + self.obs_shape, dtype=np.float32)
-        self.labels = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
-        self.groups = np.zeros((self.buffer_size, self.n_envs, 2), dtype=np.float32)
-        self.probs = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
+        self.observations = np.zeros((self.buffer_size,) + self.obs_shape, dtype=np.float32)
+        self.labels = np.zeros((self.buffer_size, 1), dtype=np.float32)
+        self.groups = np.zeros((self.buffer_size, 2), dtype=np.float32)
+        self.probs = np.zeros((self.buffer_size, 1), dtype=np.float32)
         self.pos = 0
 
     def add(self, obs: np.ndarray, label: np.ndarray, group: np.ndarray, prob: np.ndarray) -> None:
-        if isinstance(self.observation_space, spaces.Discrete):
-            obs = obs.reshape((self.n_envs,) + self.obs_shape)
 
         # this function should concatenate the old and the new data, and 
         # sample the new data to the original size
 
-        print(self.observations.shape, obs.shape)
+        if obs.shape[1] == 1:
+            obs = obs.squeeze(axis=1)
+#        if group.shape[1] == 1:
+ #           group = group.reshape((group.shape[0], 2))
+
         self.observations = np.concatenate((self.observations, obs), axis=0)
         self.labels = np.concatenate((self.labels, label), axis=0)
-        self.groups = np.concatenate((self.groups, group), axis=0)
-        self.probs = np.concatenate((self.probs, prob.reshape(-1, 1)), axis=0)
+  #      self.groups = np.concatenate((self.groups, group), axis=0)
+  #      self.probs = np.concatenate((self.probs, prob.reshape(-1, 1)), axis=0)
 
         if self.observations.shape[0] > self.buffer_size:
             # sample to return to the original size
@@ -820,9 +822,13 @@ class ReplayMemory(BaseBuffer):
             )
             self.observations = self.observations[indices]
             self.labels = self.labels[indices]
-            self.groups = self.groups[indices]
-            self.probs = self.probs[indices]
+           # self.groups = self.groups[indices]
+           # self.probs = self.probs[indices]
 
+
+        # add an empty dimension to the observations
+      #  self.observations = np.expand_dims(self.observations, axis=1)
+       # self.groups = np.expand_dims(self.groups, axis=1)
 
     def get(self, batch_size: Optional[int] = None) -> Generator[ReplayMemorySamples, None, None]:
         # Sample random indices
@@ -837,8 +843,8 @@ class ReplayMemory(BaseBuffer):
                 "probs",
             ]
 
-            for tensor in _tensor_names:
-                self.__dict__[tensor] = self.swap_and_flatten(self.__dict__[tensor])
+            #for tensor in _tensor_names:
+            #    self.__dict__[tensor] = self.swap_and_flatten(self.__dict__[tensor])
             self.generator_ready = True
 
         # Return everything, don't create minibatches

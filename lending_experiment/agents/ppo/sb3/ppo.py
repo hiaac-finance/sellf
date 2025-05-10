@@ -215,7 +215,7 @@ class PPO(OnPolicyAlgorithm):
 
         # learn the prediction model
         if self.ad_reg == "sellf":
-            for epoch in range(self.n_epochs):
+            for epoch in range(1):
                 pred_losses = []
                 for rollout_data in self.memory.get(self.batch_size):
                     preds = self.policy.prob_label(rollout_data.observations)

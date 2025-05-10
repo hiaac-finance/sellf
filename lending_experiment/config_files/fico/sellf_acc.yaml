@@ -16,6 +16,7 @@ algorithm:
   eval_timesteps: 50_000
   ad_reg: "sellf"
   learning_rate: 1e-5
+  beta_2: 0.5
 
 
 policy:

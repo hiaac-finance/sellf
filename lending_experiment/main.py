@@ -103,8 +103,7 @@ def get_env(env_name: str):
         env_params = DelayedImpactParams(
             applicant_distribution=two_group_credit_clusters(
                 cluster_probabilities=data["cluster_probabilities"],
-                #group_likelihoods=data["group_likelihoods"],
-                group_likelihoods=[0.5, 0.5],
+                group_likelihoods=data["group_likelihoods"],
                 success_probabilities=data["success_probabilities"]
             ),
             bank_starting_cash=10_000,

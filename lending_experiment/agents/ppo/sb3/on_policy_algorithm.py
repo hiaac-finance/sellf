@@ -123,7 +123,7 @@ class OnPolicyAlgorithm(BaseAlgorithm):
         )
 
         self.memory = ReplayMemory(
-            self.n_steps,
+            10000,
             self.observation_space,
             self.action_space,
             device=self.device,
