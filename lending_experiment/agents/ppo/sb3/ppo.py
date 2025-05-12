@@ -75,6 +75,7 @@ class PPO(OnPolicyAlgorithm):
             beta_0: float = 1.0,
             beta_1: float = 0.25,
             beta_2: float = 0.,
+            beta_3: float = 0.,
             omega: float = 0.005,
             n_steps: int = 2048,
             batch_size: int = 64,
@@ -156,6 +157,7 @@ class PPO(OnPolicyAlgorithm):
         self.beta_0 = beta_0
         self.beta_1 = beta_1
         self.beta_2 = beta_2
+        self.beta_3 = beta_3
         self.omega = omega
         self.batch_size = batch_size
         self.n_epochs = n_epochs
@@ -196,8 +198,7 @@ class PPO(OnPolicyAlgorithm):
         entropy_losses = []
         pg_losses, value_losses = [], []
         clip_fractions = []
-        pred_losses, pred_losses_g0, pred_losses_g1 = [], [], []
-        prob_loan_min, prob_loan_mean, prob_loan_max = [], [], []
+        pred_losses = []
 
         continue_training = True
         
@@ -219,7 +220,11 @@ class PPO(OnPolicyAlgorithm):
                 pred_losses = []
                 for rollout_data in self.memory.get(self.batch_size):
                     preds = self.policy.prob_label(rollout_data.observations)
+                    with th.no_grad():
+                        prob_loan = self.policy.prob_loan(rollout_data.observations)
+                        prob_loan = th.clamp(prob_loan, min=1e-2, max=1 - 1e-2)
                     pred_loss = pred_criterion(preds, rollout_data.labels)
+                    pred_loss = pred_loss / prob_loan
                     pred_loss = pred_loss.mean()
                     pred_losses.append(pred_loss.item())
                     # Optimization step
@@ -229,8 +234,19 @@ class PPO(OnPolicyAlgorithm):
                     th.nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
                     self.policy.optimizer.step()
 
+        # calculate acceptance rate from rollout buffer
+        g0_idx = (self.rollout_buffer.groups[:, 0, 0] == 1).nonzero()
+        g1_idx = (self.rollout_buffer.groups[:, 0, 1] == 1).nonzero()
+        accept_g0 = self.rollout_buffer.actions[g0_idx].mean().item()
+        accept_g1 = self.rollout_buffer.actions[g1_idx].mean().item()
 
-
+        # calculate the error rate
+        with th.no_grad():
+            predictions = self.policy.prob_label(torch.Tensor(self.rollout_buffer.observations[:, 0, :]).to(self.device))
+            predictions = predictions.cpu().numpy()
+        error_g0 = np.abs(self.rollout_buffer.labels[g0_idx] - predictions[g0_idx]).mean().item()
+        error_g1 = np.abs(self.rollout_buffer.labels[g1_idx] - predictions[g1_idx]).mean().item()
+    
         # train for n_epochs epochs
         for epoch in range(self.n_epochs):
             approx_kl_divs = []
@@ -275,25 +291,30 @@ class PPO(OnPolicyAlgorithm):
                     # Add terms to advantages
                     advantages = (self.beta_0 * advantages + self.beta_1 * vt_term + self.beta_2 * div_term)
                 elif self.ad_reg == "sellf":
-                    probs = self.policy.prob_label(rollout_data.observations)
-                    pred_loss = pred_criterion(probs, rollout_data.labels)
-
+                    with th.no_grad():
+                        probs = self.policy.prob_label(rollout_data.observations)
+                        labels = rollout_data.labels
+                        error_term = torch.abs(labels - probs)
+                        # if it was denied, make it 0
+                        error_term = error_term * actions 
+                    
                     vt_term = torch.min(
                         torch.zeros(rollout_data.deltas.shape[0]).to(self.device),
                         -rollout_data.deltas + torch.tensor(self.omega, dtype=torch.float32)
                     )
 
-                    # increase advantage if the prediction was wrong
-                    error_term = pred_loss.clone().detach()
+                    div_cond = torch.where(rollout_data.deltas > torch.tensor(self.omega, dtype=torch.float32).to(self.device),
+                                           torch.tensor(1, dtype=torch.float32).to(self.device),
+                                           torch.tensor(0, dtype=torch.float32).to(self.device))
+                    div_term = torch.min(torch.zeros(rollout_data.delta_deltas.shape[0]).to(self.device),
+                                         -div_cond * rollout_data.delta_deltas)
 
-                    # if it was denied, make it 0
-                    error_term = error_term * actions
-
-                    vt_term = (vt_term - torch.min(vt_term)) / (torch.max(vt_term) - torch.min(vt_term) + 1e-8)
-                    error_term = (error_term - torch.min(error_term)) / (torch.max(error_term) - torch.min(error_term) + 1e-8)
                     advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+                    vt_term = (vt_term - torch.min(vt_term)) / (torch.max(vt_term) - torch.min(vt_term) + 1e-8)
+                    div_term = (div_term - torch.min(div_term)) / (torch.max(div_term) - torch.min(div_term) + 1e-8)
+                    error_term = (error_term - torch.min(error_term)) / (torch.max(error_term) - torch.min(error_term) + 1e-8)
 
-                    advantages = (self.beta_0 * advantages + self.beta_1 * vt_term + self.beta_2 * error_term)
+                    advantages = (self.beta_0 * advantages + self.beta_1 * vt_term + self.beta_2 * div_term + self.beta_3 * error_term)
 
                     #with th.no_grad():
                     #    g0_idx = ((rollout_data.groups[:, 0] == 1) & (actions == 1)).nonzero()
@@ -351,7 +372,7 @@ class PPO(OnPolicyAlgorithm):
 
                 entropy_losses.append(entropy_loss.item())
 
-                loss = policy_loss + self.ent_coef * entropy_loss + self.vf_coef * value_loss # + 0.5 * pred_loss
+                loss = policy_loss + self.ent_coef * entropy_loss + self.vf_coef * value_loss
 
                 # Calculate approximate form of reverse KL Divergence for early stopping
                 # see issue #417: https://github.com/DLR-RM/stable-baselines3/issues/417
@@ -390,13 +411,13 @@ class PPO(OnPolicyAlgorithm):
         self.logger.record("train/loss", loss.item())
         self.logger.record("train/explained_variance", explained_var)
         self.logger.record("train/pred_loss", np.mean(pred_losses))
-        self.logger.record("train/pred_loss_g0", np.mean(pred_losses_g0))
-        self.logger.record("train/pred_loss_g1", np.mean(pred_losses_g1))
         self.logger.record("train/accept_rate", np.mean(self.rollout_buffer.actions.flatten()))
         self.logger.record("train/pos_rate", np.mean(self.rollout_buffer.labels.flatten()))
-        self.logger.record("train/prob_loan_min", np.mean(prob_loan_min))
-        self.logger.record("train/prob_loan_mean", np.mean(prob_loan_mean))
-        self.logger.record("train/prob_loan_max", np.mean(prob_loan_max))
+        self.logger.record("train/accept_g0", accept_g0)
+        self.logger.record("train/accept_g1", accept_g1)
+        self.logger.record("train/error_g0", error_g0)
+        self.logger.record("train/error_g1", error_g1)
+
         if hasattr(self.policy, "log_std"):
             self.logger.record("train/std", th.exp(self.policy.log_std).mean().item())
 
