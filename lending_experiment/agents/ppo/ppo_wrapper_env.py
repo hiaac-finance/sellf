@@ -38,7 +38,7 @@ class PPOEnvWrapper(gym.Wrapper):
         self.delta_delta = 0
 
         # my addition
-        self.window = 200
+        self.window = 300
         self.y_real_hist = [deque(maxlen=self.window) for _ in range(2)]
         self.y_pred_hist = [deque(maxlen=self.window) for _ in range(2)]
         self.a_hist = [deque(maxlen=self.window) for _ in range(2)]
@@ -88,6 +88,16 @@ class PPOEnvWrapper(gym.Wrapper):
                 action = np.array(self.a_hist[i])
                 self.mu_real[i] = np.mean(y_real == action) if len(y_real) > 0 else 1
                 self.mu[i] = np.mean(y_pred == action) if len(y_pred) > 0 else 1
+        elif self.mu_type == "tpr":
+            for i in range(2):
+                y_real = np.array(self.y_real_hist[i])
+                y_pred = np.array(self.y_pred_hist[i])
+                action = np.array(self.a_hist[i])
+                if len(y_real) > 0 and np.sum(y_real) > 0:
+                    self.mu_real[i] = np.mean(action[y_real == 1])
+                if np.sum(y_pred) > 0:
+                    self.mu[i] = np.mean(action[y_pred == 1])
+
 
 
     def step(self, action):
