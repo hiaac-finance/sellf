@@ -137,7 +137,14 @@ def train(train_timesteps, env, config):
 
     print('env_params: ', env.state.params)
 
-    env = PPOEnvWrapper(env=env, reward_fn=LendingReward, mu_type=config.environment.mu_type)
+    env = PPOEnvWrapper(
+        env=env, 
+        reward_fn=LendingReward, 
+        ep_timesteps=config.environment.ep_timesteps,
+        mu_type=config.environment.mu_type, 
+        delta_type=config.environment.delta_type,
+        partial_observation=config.environment.partial_observation,
+    )
     env = Monitor(env)
     env = DummyVecEnv([lambda: env])
 
@@ -328,11 +335,19 @@ def main():
     env = get_env(config.general.env_name)
     name = config.general.algorithm
     agent = PPO.load(model_path, verbose=1)
+    env = PPOEnvWrapper(
+        env=env, 
+        reward_fn=LendingReward, 
+        ep_timesteps=config.environment.ep_timesteps,
+        mu_type=config.environment.mu_type, 
+        delta_type=config.environment.delta_type,
+        partial_observation=config.environment.partial_observation,
+    )
     evaluate(
-        env=PPOEnvWrapper(env=env, reward_fn=LendingReward, ep_timesteps=eval_timesteps, mu_type=config.environment.mu_type),
+        env=env,
         agent=agent,
         num_eps=eval_eps,
-        num_timesteps=eval_timesteps,
+        num_timesteps=config.environment.ep_timesteps,
         name=name,
         seeds=seeds,
         eval_path=eval_path
