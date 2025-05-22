@@ -10,14 +10,13 @@ class PPOEnvWrapper(gym.Wrapper):
         reward_fn,
         ep_timesteps=2000,
         mu_type = "qualification",
-        delta_type="imputation",
-        partial_observation=True,
+        obs_type = "imputation",
         zeta_0 = 1,
         zeta_1 = 0,
     ):
         super(PPOEnvWrapper, self).__init__(env)
         assert mu_type in ["qualification", "accuracy", "tpr"], f"mu_type {mu_type} not supported"
-        assert delta_type in ["imputation", "accepted"], f"delta_type {delta_type} not supported"
+        assert obs_type in ["imputation", "accepted", "full"], f"obs_type {obs_type} not supported"
 
         self.observation_space = spaces.Box(
             low=np.inf,
@@ -34,8 +33,7 @@ class PPOEnvWrapper(gym.Wrapper):
         self.timestep = 0
         self.ep_timesteps = ep_timesteps
         self.mu_type = mu_type
-        self.delta_type = delta_type
-        self.partial_observation = partial_observation
+        self.obs_type = obs_type
         self.zeta_0 = zeta_0
         self.zeta_1 = zeta_1
 
@@ -47,6 +45,7 @@ class PPOEnvWrapper(gym.Wrapper):
         self.window = 300
         self.y_real_hist = [deque(maxlen=self.window) for _ in range(2)]
         self.y_pred_hist = [deque(maxlen=self.window) for _ in range(2)]
+        self.pred_hist = [deque(maxlen=self.window) for _ in range(2)]
         self.a_hist = [deque(maxlen=self.window) for _ in range(2)]
         self.pred = 0
         self.mu = np.zeros(2,)
@@ -81,32 +80,21 @@ class PPOEnvWrapper(gym.Wrapper):
             y_pred = np.array(self.y_pred_hist[i])
             action = np.array(self.a_hist[i])
 
-            # first compute mu_real
             if self.mu_type == "qualification":
                 self.mu_real[i] = y_real.mean() if len(y_real) > 0 else 1
+                self.mu[i] = y_pred.mean() if len(y_pred) > 0 else 1
             elif self.mu_type == "accuracy":
                 self.mu_real[i] = (y_real == action).mean() if len(y_real) > 0 else 1
+                self.mu[i] = (y_pred == action).mean() if len(y_pred) > 0 else 1
             elif self.mu_type == "tpr":
                 self.mu_real[i] = np.mean(action[y_real == 1]) if y_real.sum() > 0 else 1
-
-            
-            # then compute mu
-            if self.mu_type == "qualification":
-                if self.delta_type == "imputation":
-                    self.mu[i] = y_pred.mean() if len(y_pred) > 0 else 1
-                elif self.delta_type == "accepted":
-                    self.mu[i] = np.mean(y_pred[action == 1]) if action.sum() > 0 else 1
-            elif self.mu_type == "accuracy":
-                if self.delta_type == "imputation":
-                    self.mu[i] = (y_pred == action).mean() if len(y_pred) > 0 else 1
-                elif self.delta_type == "accepted":
-                    self.mu[i] = np.mean(y_pred[action == 1] == action[action == 1]) if action.sum() > 0 else 1
-            elif self.mu_type == "tpr":
-                if self.delta_type == "imputation":
+                if action.sum() > 0:
                     self.mu[i] = np.mean(action[y_pred == 1]) if y_pred.sum() > 0 else 1
-                elif self.delta_type == "accepted":
-                    self.mu[i] = 1 # is always 1
-        
+
+            # calculate rejection terms
+            self.rejection[i] = np.mean(action == 0) if len(action) > 0 else 0
+            error = y_real - pred
+            self.error_rejection[i] = np.mean(error[action == 0]) if (action - 1).sum() > 0 else 0
 
 
     def step(self, action):
@@ -118,12 +106,17 @@ class PPOEnvWrapper(gym.Wrapper):
         self.old_bank_cash = self.env.state.bank_cash
 
         label = 1 - self.env.state.will_default
-        if self.partial_observation:
+        if self.obs_type == "imputation":
             pred = self.pred if action == 0 else label
-        else:
-            pred = label
-        self.y_real_hist[group_id].append(1 - label)
-        self.y_pred_hist[group_id].append(pred)
+            self.y_pred_hist[group_id].append(pred)
+        elif self.obs_type == "accepted":
+            if action == 1:
+                self.y_pred_hist[group_id].append(label)
+        elif self.obs_type == "full":
+            self.y_pred_hist[group_id].append(label)
+
+        self.y_real_hist[group_id].append(label)
+        self.pred_hist[group_id].append(self.pred)
         self.a_hist[group_id].append(action)
         self.compute_mu()
 
