@@ -32,6 +32,7 @@ class RolloutBufferSamples(NamedTuple):
     returns: th.Tensor
     deltas: th.Tensor
     delta_deltas: th.Tensor
+    delta_b_terms: th.Tensor
 
 class ReplayMemorySamples(NamedTuple):
     observations: th.Tensor

@@ -357,6 +357,7 @@ class RolloutBuffer(BaseBuffer):
         self.advantages = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
         self.deltas = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
         self.delta_deltas = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
+        self.delta_b_terms = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
         self.generator_ready = False
         super(RolloutBuffer, self).reset()
 
@@ -404,8 +405,8 @@ class RolloutBuffer(BaseBuffer):
         value: th.Tensor,
         log_prob: th.Tensor,
         deltas: th.Tensor,
-        delta_deltas: th.Tensor
-
+        delta_deltas: th.Tensor,
+        delta_b_terms: th.Tensor,
     ) -> None:
         """
         :param obs: Observation
@@ -436,6 +437,7 @@ class RolloutBuffer(BaseBuffer):
         self.log_probs[self.pos] = log_prob.clone().cpu().numpy()
         self.deltas[self.pos] = deltas.clone().cpu().numpy()
         self.delta_deltas[self.pos] = delta_deltas.clone().cpu().numpy()
+        self.delta_b_terms[self.pos] = delta_b_terms.clone().cpu().numpy()
         self.pos += 1
         if self.pos == self.buffer_size:
             self.full = True
@@ -457,6 +459,7 @@ class RolloutBuffer(BaseBuffer):
                 "returns",
                 "deltas",
                 "delta_deltas",
+                "delta_b_terms",
             ]
 
             for tensor in _tensor_names:
@@ -483,7 +486,8 @@ class RolloutBuffer(BaseBuffer):
             self.advantages[batch_inds].flatten(),
             self.returns[batch_inds].flatten(),
             self.deltas[batch_inds].flatten(),
-            self.delta_deltas[batch_inds].flatten()
+            self.delta_deltas[batch_inds].flatten(),
+            self.delta_b_terms[batch_inds].flatten(),
         )
         return RolloutBufferSamples(*tuple(map(self.to_torch, data)))
 

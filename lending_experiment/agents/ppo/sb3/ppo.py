@@ -244,8 +244,16 @@ class PPO(OnPolicyAlgorithm):
         with th.no_grad():
             predictions = self.policy.prob_label(torch.Tensor(self.rollout_buffer.observations[:, 0, :]).to(self.device))
             predictions = predictions.cpu().numpy()
-        error_g0 = np.abs(self.rollout_buffer.labels[g0_idx] - predictions[g0_idx]).mean().item()
-        error_g1 = np.abs(self.rollout_buffer.labels[g1_idx] - predictions[g1_idx]).mean().item()
+
+        error_g0 = (predictions[g0_idx] - self.rollout_buffer.labels[g0_idx]).mean().item()
+        error_g1 = (predictions[g1_idx] - self.rollout_buffer.labels[g1_idx]).mean().item()
+
+        #b_term_0 = (1 - accept_g0) * error_rejected_g0
+        #b_term_1 = (1 - accept_g1) * error_rejected_g1
+
+        delta = self.rollout_buffer.deltas.mean().item()
+        delta_delta = self.rollout_buffer.delta_deltas.mean().item()
+        delta_b_term = self.rollout_buffer.delta_b_terms.mean().item()
     
         # train for n_epochs epochs
         for epoch in range(self.n_epochs):
@@ -291,13 +299,6 @@ class PPO(OnPolicyAlgorithm):
                     # Add terms to advantages
                     advantages = (self.beta_0 * advantages + self.beta_1 * vt_term + self.beta_2 * div_term)
                 elif self.ad_reg == "sellf":
-                    with th.no_grad():
-                        probs = self.policy.prob_label(rollout_data.observations)
-                        labels = rollout_data.labels
-                        error_term = torch.abs(labels - probs)
-                        # if it was denied, make it 0
-                        error_term = error_term * actions 
-                    
                     vt_term = torch.min(
                         torch.zeros(rollout_data.deltas.shape[0]).to(self.device),
                         -rollout_data.deltas + torch.tensor(self.omega, dtype=torch.float32)
@@ -309,28 +310,19 @@ class PPO(OnPolicyAlgorithm):
                     div_term = torch.min(torch.zeros(rollout_data.delta_deltas.shape[0]).to(self.device),
                                          -div_cond * rollout_data.delta_deltas)
 
+                    # error term is equal to the negative value of delta_b_term
+                    error_term = torch.min(
+                        torch.zeros(rollout_data.delta_b_terms.shape[0]).to(self.device),
+                        -rollout_data.delta_b_terms + torch.tensor(self.omega, dtype=torch.float32)
+                    )
+
+
                     advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
                     vt_term = (vt_term - torch.min(vt_term)) / (torch.max(vt_term) - torch.min(vt_term) + 1e-8)
                     div_term = (div_term - torch.min(div_term)) / (torch.max(div_term) - torch.min(div_term) + 1e-8)
                     error_term = (error_term - torch.min(error_term)) / (torch.max(error_term) - torch.min(error_term) + 1e-8)
 
                     advantages = (self.beta_0 * advantages + self.beta_1 * vt_term + self.beta_2 * div_term + self.beta_3 * error_term)
-
-                    #with th.no_grad():
-                    #    g0_idx = ((rollout_data.groups[:, 0] == 1) & (actions == 1)).nonzero()
-                    #    g1_idx = ((rollout_data.groups[:, 1] == 1) & (actions == 1)).nonzero()
-                    #    action_idx = (actions == 1).nonzero()
-                    #    pred_losses_g0.append(pred_loss[g0_idx].mean().item())
-                    #    pred_losses_g1.append(pred_loss[g1_idx].mean().item())
-                    #    pred_losses.append(pred_loss[action_idx].mean().item())
-                    #    prob_loan = self.policy.prob_loan(rollout_data.observations)
-                    #    prob_loan_min.append(prob_loan.min().item())
-                    #    prob_loan_max.append(prob_loan.max().item())
-                    #    prob_loan_mean.append(prob_loan.mean().item())
-                    #    # clip
-                    #    #prob_loan = th.clamp(prob_loan, min=1e-5, max=1 - 1e-5)
-                    #pred_loss = (pred_loss / prob_loan) # TODO VERIFY THIS LINE
-                    #pred_loss = pred_loss[action_idx].mean() # TODO VERIFY THIS LINE
 
                 # Normalize advantage
                 if self.normalize_advantage:
@@ -417,6 +409,11 @@ class PPO(OnPolicyAlgorithm):
         self.logger.record("train/accept_g1", accept_g1)
         self.logger.record("train/error_g0", error_g0)
         self.logger.record("train/error_g1", error_g1)
+        #self.logger.record("train/B_0", b_term_0)
+        #self.logger.record("train/B_1", b_term_1)
+        self.logger.record("train/delta_b_term", delta_b_term)
+        self.logger.record("train/delta", delta)
+        self.logger.record("train/delta_delta", delta_delta)
 
         if hasattr(self.policy, "log_std"):
             self.logger.record("train/std", th.exp(self.policy.log_std).mean().item())

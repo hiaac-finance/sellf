@@ -50,6 +50,8 @@ class PPOEnvWrapper(gym.Wrapper):
         self.pred = 0
         self.mu = np.zeros(2,)
         self.mu_real = np.zeros(2,)
+        self.rejection = np.zeros(2,)
+        self.error_rejection = np.zeros(2,)
 
     def process_observation(self, obs):
         credit_score = obs['applicant_features']
@@ -62,15 +64,19 @@ class PPOEnvWrapper(gym.Wrapper):
         self.delta = np.zeros(1, )
         self.old_bank_cash = 0
         self.delta_delta = 0    
+        self.delta_b_term = 0
 
 
         # my addiition
         self.y_real_hist = [deque(maxlen=self.window) for _ in range(2)]
         self.y_pred_hist = [deque(maxlen=self.window) for _ in range(2)]
+        self.pred_hist = [deque(maxlen=self.window) for _ in range(2)]
         self.a_hist = [deque(maxlen=self.window) for _ in range(2)]
         self.pred = 0
         self.mu = np.ones(2,)
         self.mu_real = np.ones(2,)
+        self.rejection = np.zeros(2,)
+        self.error_rejection = np.zeros(2,)
 
         return self.process_observation(self.env.reset())
     
@@ -78,6 +84,7 @@ class PPOEnvWrapper(gym.Wrapper):
         for i in range(2):
             y_real = np.array(self.y_real_hist[i])
             y_pred = np.array(self.y_pred_hist[i])
+            pred = np.array(self.pred_hist[i])
             action = np.array(self.a_hist[i])
 
             if self.mu_type == "qualification":
@@ -123,6 +130,9 @@ class PPOEnvWrapper(gym.Wrapper):
         self.delta = np.abs(self.mu[0] - self.mu[1])
         self.delta_real = np.abs(self.mu_real[0] - self.mu_real[1])
         self.delta_delta = self.delta - old_delta
+        self.delta_b_term = np.abs(
+            self.rejection[0] * self.error_rejection[0] - self.rejection[1] * self.error_rejection[1]
+        )
 
 
         obs, _, done, info = self.env.step(action)
