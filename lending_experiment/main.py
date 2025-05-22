@@ -112,6 +112,22 @@ def get_env(env_name: str):
         )
         env = DelayedImpactEnv(env_params)
 
+    elif env_name == "fico_fast":
+        with open("data/fico.pkl", "rb") as f:
+            data = pkl.load(f)
+
+        env_params = DelayedImpactParams(
+            applicant_distribution=two_group_credit_clusters(
+                cluster_probabilities=data["cluster_probabilities"],
+                group_likelihoods=[0.5, 0.5], #data["group_likelihoods"],
+                success_probabilities=data["success_probabilities"]
+            ),
+            bank_starting_cash=10_000,
+            interest_rate=0.25,
+            cluster_shift_increment=0.1,
+        )
+        env = DelayedImpactEnv(env_params)
+
     elif env_name == "enem":
         with open("data/enem.pkl", "rb") as f:
             data = pkl.load(f)
@@ -123,7 +139,7 @@ def get_env(env_name: str):
                 success_probabilities=data["success_probabilities"]
             ),
             bank_starting_cash=10_000,
-            interest_rate=10,
+            interest_rate=1.5,
             cluster_shift_increment=0.01,
         )
         env = EnemEnv(env_params)
@@ -142,8 +158,7 @@ def train(train_timesteps, env, config):
         reward_fn=LendingReward, 
         ep_timesteps=config.environment.ep_timesteps,
         mu_type=config.environment.mu_type, 
-        delta_type=config.environment.delta_type,
-        partial_observation=config.environment.partial_observation,
+        obs_type=config.environment.obs_type,
     )
     env = Monitor(env)
     env = DummyVecEnv([lambda: env])
@@ -319,7 +334,7 @@ def main():
 
     # Get random seeds
     eval_eps = 5
-    eval_timesteps = 10_000
+    #eval_timesteps = 10_000
     seeds = [random.randint(0, 10000) for _ in range(eval_eps)]
 
     with open(eval_path + '/seeds.txt', 'w') as f:
@@ -340,8 +355,7 @@ def main():
         reward_fn=LendingReward, 
         ep_timesteps=config.environment.ep_timesteps,
         mu_type=config.environment.mu_type, 
-        delta_type=config.environment.delta_type,
-        partial_observation=config.environment.partial_observation,
+        obs_type=config.environment.obs_type,
     )
     evaluate(
         env=env,
