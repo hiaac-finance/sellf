@@ -368,12 +368,14 @@ class _EnemShift(core.StateUpdater):
 
         n_age_groups = 15
         age_group = cluster_id % n_age_groups
-        school_group = school_group // n_age_groups
+        school_group = cluster_id // n_age_groups
 
         if action == LoanDecision.ACCEPT:
             # move the mass of the individual to the "last cluster"
             new_cluster_id = len(cluster_probs) - 1
 
+            # change!!! stay at the same cluster
+            new_cluster_id = cluster_id
         else:
             # move the mass of the individual to the next cluster based on age
             new_age_group = age_group + 1
