@@ -217,7 +217,10 @@ class PredActorCriticPolicy(ActorCriticPolicy):
         if obs.shape[1] == self.features_dim:
             features = features[:, :-2]
         probs = self.predictor_net(features)
-        return (probs > 0.5).float()
+        # sample a uniform random number
+        p = th.rand((obs.shape[0]), dtype=th.float32, device=self.device)
+        labels = (probs > p).float()
+        return labels
 
 
 

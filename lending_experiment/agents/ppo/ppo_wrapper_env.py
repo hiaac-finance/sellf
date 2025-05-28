@@ -42,7 +42,7 @@ class PPOEnvWrapper(gym.Wrapper):
         self.delta_delta = 0
 
         # my addition
-        self.window = 300
+        self.window = 100
         self.y_real_hist = [deque(maxlen=self.window) for _ in range(2)]
         self.y_pred_hist = [deque(maxlen=self.window) for _ in range(2)]
         self.pred_hist = [deque(maxlen=self.window) for _ in range(2)]

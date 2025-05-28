@@ -239,8 +239,9 @@ class OnPolicyAlgorithm(BaseAlgorithm):
             delta = torch.tensor(np.array(env.get_attr('delta')))
             delta_delta = torch.tensor(np.array(env.get_attr('delta_delta')))
             delta_b_term = torch.tensor(np.array(env.get_attr('delta_b_term')))
+            delta_real = torch.tensor(np.array(env.get_attr('delta_real')))
             
-            rollout_buffer.add(self._last_obs, actions, label, group, rewards, self._last_episode_starts, values, log_probs, delta, delta_delta, delta_b_term)
+            rollout_buffer.add(self._last_obs, actions, label, group, rewards, self._last_episode_starts, values, log_probs, delta, delta_delta, delta_b_term, delta_real)
             self._last_obs = new_obs
             self._last_episode_starts = dones
 

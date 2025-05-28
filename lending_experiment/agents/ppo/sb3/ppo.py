@@ -254,6 +254,7 @@ class PPO(OnPolicyAlgorithm):
         delta = self.rollout_buffer.deltas.mean().item()
         delta_delta = self.rollout_buffer.delta_deltas.mean().item()
         delta_b_term = self.rollout_buffer.delta_b_terms.mean().item()
+        delta_real = self.rollout_buffer.delta_reals.mean().item()
     
         # train for n_epochs epochs
         for epoch in range(self.n_epochs):
@@ -414,6 +415,7 @@ class PPO(OnPolicyAlgorithm):
         self.logger.record("train/delta_b_term", delta_b_term)
         self.logger.record("train/delta", delta)
         self.logger.record("train/delta_delta", delta_delta)
+        self.logger.record("train/delta_real", delta_real)
 
         if hasattr(self.policy, "log_std"):
             self.logger.record("train/std", th.exp(self.policy.log_std).mean().item())
