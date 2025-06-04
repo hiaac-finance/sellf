@@ -66,10 +66,10 @@ def get_env(env_name: str):
                     [0.0, 0.1, 0.1, 0.2, 0.3, 0.3, 0.0],
                     [0.1, 0.1, 0.2, 0.3, 0.3, 0.0, 0.0],
                 ],
-                group_likelihoods=[0.7, 0.3],
+                group_likelihoods=[0.5, 0.5],
                 success_probabilities=[
                     [0.1, 0.2, 0.45, 0.6, 0.65, 0.7, 0.7], 
-                    [0.1, 0.1, 0.25, 0.4, 0.75, 0.8, 0.8]
+                    [0.1, 0.1, 0.35, 0.5, 0.6, 0.7, 0.9]
                 ]
             ),
             bank_starting_cash=10_000,
@@ -173,6 +173,7 @@ def train(train_timesteps, env, config):
             "net_arch": [256, 256, dict(vf=[256, 128], pi=[256, 128])],
         },
         verbose=0,
+        omega=config.environment.omega,
         device=device,
         **config.algorithm
     )
@@ -314,6 +315,13 @@ def main():
     config = validate_config(config)
 
     start = time.time()
+    with open("log.txt", "a") as f:
+        f.write("\n-------------------------------------------------------------\n")
+        f.write(f"Start time: {time.strftime('%H:%M:%S', time.localtime(start))}\n")
+        f.write(f"Environment: {config.general.env_name}\n")
+        f.write(f"Algorithm: {config.general.algorithm}\n")
+        f.write(f"Train Timesteps: {config.algorithm.train_timesteps}\n")
+        
     env = get_env(config.general.env_name)
     train(train_timesteps=config.algorithm.train_timesteps, env=env, config=config)
     #    plot_rets(exp_path=EXP_DIR, save_png=True)
@@ -334,7 +342,7 @@ def main():
 
     # Get random seeds
     eval_eps = 5
-    #eval_timesteps = 10_000
+    eval_timesteps = 10_000
     seeds = [random.randint(0, 10000) for _ in range(eval_eps)]
 
     with open(eval_path + '/seeds.txt', 'w') as f:
@@ -353,7 +361,7 @@ def main():
     env = PPOEnvWrapper(
         env=env, 
         reward_fn=LendingReward, 
-        ep_timesteps=config.environment.ep_timesteps,
+        ep_timesteps=eval_timesteps, #config.environment.ep_timesteps,
         mu_type=config.environment.mu_type, 
         obs_type=config.environment.obs_type,
     )
@@ -361,7 +369,7 @@ def main():
         env=env,
         agent=agent,
         num_eps=eval_eps,
-        num_timesteps=config.environment.ep_timesteps,
+        num_timesteps=eval_timesteps,
         name=name,
         seeds=seeds,
         eval_path=eval_path
@@ -369,9 +377,7 @@ def main():
 
     end = time.time()
     with open("log.txt", "a") as f:
-        f.write(f"Environment: {config.general.env_name}\n")
-        f.write(f"Algorithm: {config.general.algorithm}\n")
-        f.write(f"Train Timesteps: {config.algorithm.train_timesteps}\n")
+        f.write(f"End time: {time.strftime('%H:%M:%S', time.localtime(end))}\n")
         f.write(f"Took: {(end - start) / 60} minutes\n")
         f.write("\n")
 
