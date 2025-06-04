@@ -76,7 +76,7 @@ class PPO(OnPolicyAlgorithm):
             beta_1: float = 0.25,
             beta_2: float = 0.,
             beta_3: float = 0.,
-            omega: float = 0.005,
+            omega: float = 0.1,
             n_steps: int = 2048,
             batch_size: int = 64,
             n_epochs: int = 10,
@@ -302,10 +302,10 @@ class PPO(OnPolicyAlgorithm):
                 elif self.ad_reg == "sellf":
                     vt_term = torch.min(
                         torch.zeros(rollout_data.deltas.shape[0]).to(self.device),
-                        -rollout_data.deltas + torch.tensor(self.omega, dtype=torch.float32)
+                        -rollout_data.deltas + torch.tensor(self.omega / 2, dtype=torch.float32)
                     )
 
-                    div_cond = torch.where(rollout_data.deltas > torch.tensor(self.omega, dtype=torch.float32).to(self.device),
+                    div_cond = torch.where(rollout_data.deltas > torch.tensor(self.omega / 2, dtype=torch.float32).to(self.device),
                                            torch.tensor(1, dtype=torch.float32).to(self.device),
                                            torch.tensor(0, dtype=torch.float32).to(self.device))
                     div_term = torch.min(torch.zeros(rollout_data.delta_deltas.shape[0]).to(self.device),
@@ -314,8 +314,15 @@ class PPO(OnPolicyAlgorithm):
                     # error term is equal to the negative value of delta_b_term
                     error_term = torch.min(
                         torch.zeros(rollout_data.delta_b_terms.shape[0]).to(self.device),
-                        -rollout_data.delta_b_terms + torch.tensor(self.omega, dtype=torch.float32)
+                        -rollout_data.delta_b_terms + torch.tensor(self.omega / 2, dtype=torch.float32)
                     )
+
+                    # only apply error_term if vt_term is zero
+                    vt_term_zero = torch.where(vt_term == 0, 
+                                               torch.tensor(1, dtype=torch.float32).to(self.device), 
+                                               torch.tensor(0, dtype=torch.float32).to(self.device)
+                                            )
+                    error_term = error_term * vt_term_zero
 
 
                     advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
@@ -332,6 +339,7 @@ class PPO(OnPolicyAlgorithm):
 
                 # ratio between old and new policy, should be one at the first iteration
                 ratio = th.exp(log_prob - rollout_data.old_log_prob)
+
 
                 # clipped surrogate loss
                 policy_loss_1 = advantages * ratio
