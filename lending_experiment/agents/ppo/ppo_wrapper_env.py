@@ -52,6 +52,7 @@ class PPOEnvWrapper(gym.Wrapper):
         self.mu_real = np.zeros(2,)
         self.rejection = np.zeros(2,)
         self.error_rejection = np.zeros(2,)
+        self.b_term = np.zeros(2,)
 
     def process_observation(self, obs):
         credit_score = obs['applicant_features']
@@ -77,6 +78,7 @@ class PPOEnvWrapper(gym.Wrapper):
         self.mu_real = np.ones(2,)
         self.rejection = np.zeros(2,)
         self.error_rejection = np.zeros(2,)
+        self.b_term = np.zeros(2,)
 
         return self.process_observation(self.env.reset())
     
@@ -87,21 +89,45 @@ class PPOEnvWrapper(gym.Wrapper):
             pred = np.array(self.pred_hist[i])
             action = np.array(self.a_hist[i])
 
+
+            # calculate first mu_real
             if self.mu_type == "qualification":
                 self.mu_real[i] = y_real.mean() if len(y_real) > 0 else 1
-                self.mu[i] = y_pred.mean() if len(y_pred) > 0 else 1
             elif self.mu_type == "accuracy":
                 self.mu_real[i] = (y_real == action).mean() if len(y_real) > 0 else 1
-                self.mu[i] = (y_pred == action).mean() if len(y_pred) > 0 else 1
             elif self.mu_type == "tpr":
                 self.mu_real[i] = np.mean(action[y_real == 1]) if y_real.sum() > 0 else 1
-                if action.sum() > 0:
+            # now, calculate mu
+            if self.obs_type == "imputation":
+                if self.mu_type == "qualification":
+                    self.mu[i] = y_pred.mean() if len(y_pred) > 0 else 1
+                elif self.mu_type == "accuracy":
+                    self.mu[i] = (y_pred == action).mean() if len(y_pred) > 0 else 1
+                elif self.mu_type == "tpr":
                     self.mu[i] = np.mean(action[y_pred == 1]) if y_pred.sum() > 0 else 1
+            elif self.obs_type == "accepted":
+                if self.mu_type == "qualification":
+                    self.mu[i] = y_pred[action == 1].mean() if (action == 1).sum() > 0 else 1
+                elif self.mu_type == "accuracy":
+                    self.mu[i] = (y_pred[action == 1] == 1).mean() if (action == 1).sum() > 0 else 1
+                elif self.mu_type == "tpr":
+                    self.mu[i] = 1
+            elif self.obs_type == "full":
+                self.mu[i] = self.mu_real[i]
 
             # calculate rejection terms
             self.rejection[i] = np.mean(action == 0) if len(action) > 0 else 0
-            error = y_real - pred
-            self.error_rejection[i] = np.mean(error[action == 0]) if (action - 1).sum() > 0 else 0
+            error = pred - y_real
+            # calculate error in the accepted group
+            self.error_rejection[i] = np.mean(error[action == 1]) if (action).sum() > 0 else 0
+            if self.mu_type == "qualification" or self.mu_type == "accuracy":
+                self.b_term[i] = self.rejection[i] * self.error_rejection[i]
+            else:
+                if len(y_pred) == 0 or np.mean(y_pred) == 0:
+                    self.b_term[i] = 1
+                else:
+                    self.b_term[i] = 1 - self.rejection[i] * self.error_rejection[i] / np.mean(y_pred)
+            
 
 
     def step(self, action):
@@ -109,20 +135,16 @@ class PPOEnvWrapper(gym.Wrapper):
 
         # Update instance variables before we step the environment
         group_id = np.argmax(self.env.state.group)
-        
         self.old_bank_cash = self.env.state.bank_cash
-
         label = 1 - self.env.state.will_default
+
         if self.obs_type == "imputation":
             pred = self.pred if action == 0 else label
-            self.y_pred_hist[group_id].append(pred)
-        elif self.obs_type == "accepted":
-            if action == 1:
-                self.y_pred_hist[group_id].append(label)
-        elif self.obs_type == "full":
-            self.y_pred_hist[group_id].append(label)
+        else:
+            pred = label
 
         self.y_real_hist[group_id].append(label)
+        self.y_pred_hist[group_id].append(pred)
         self.pred_hist[group_id].append(self.pred)
         self.a_hist[group_id].append(action)
         self.compute_mu()
@@ -130,9 +152,7 @@ class PPOEnvWrapper(gym.Wrapper):
         self.delta = np.abs(self.mu[0] - self.mu[1])
         self.delta_real = np.abs(self.mu_real[0] - self.mu_real[1])
         self.delta_delta = self.delta - old_delta
-        self.delta_b_term = np.abs(
-            self.rejection[0] * self.error_rejection[0] - self.rejection[1] * self.error_rejection[1]
-        )
+        self.delta_b_term = np.abs(self.b_term[0] - self.b_term[1])
 
 
         obs, _, done, info = self.env.step(action)
