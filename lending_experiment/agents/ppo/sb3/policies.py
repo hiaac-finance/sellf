@@ -12,6 +12,7 @@ import torch as th
 import gym
 from gym import spaces
 from torch import nn
+from torch.optim import lr_scheduler
 
 
 from stable_baselines3.common.distributions import (
@@ -147,6 +148,16 @@ class PredActorCriticPolicy(ActorCriticPolicy):
                 nn.Dropout(0.5),
                 nn.Linear(32, 1),
                 nn.Sigmoid(),
+            )
+
+            self.pred_optimizer = self.optimizer_class(
+                self.predictor_net.parameters(),
+                lr=1e-3,
+                **self.optimizer_kwargs,
+            )
+            self.scheduler = lr_scheduler.ExponentialLR(
+                self.pred_optimizer,
+                gamma=0.99,
             )
 
         # Init weights: use orthogonal initialization
