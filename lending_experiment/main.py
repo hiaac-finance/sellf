@@ -30,7 +30,7 @@ from yaml import full_load
 import sys; sys.path.append('..')
 
 from lending_experiment.environments import params, rewards
-from lending_experiment.environments.lending import DelayedImpactEnv, EnemEnv
+from lending_experiment.environments.lending import DelayedImpactEnv, EnemPoolEnv
 from lending_experiment.environments.lending_params import DelayedImpactParams, two_group_credit_clusters
 from lending_experiment.environments.rewards import LendingReward
 from lending_experiment.agents.ppo.ppo_wrapper_env import PPOEnvWrapper, Monitor
@@ -68,12 +68,12 @@ def get_env(env_name: str):
                 ],
                 group_likelihoods=[0.5, 0.5],
                 success_probabilities=[
-                    [0.1, 0.2, 0.45, 0.6, 0.65, 0.7, 0.7], 
-                    [0.1, 0.1, 0.35, 0.5, 0.6, 0.7, 0.9]
+                   [0.3, 0.4, 0.65, 0.8, 0.85, 0.9, 0.9],
+                   [0.5, 0.55, 0.7, 0.7, 0.75, 0.75, 0.8], 
                 ]
             ),
             bank_starting_cash=10_000,
-            interest_rate=1,
+            interest_rate=0.25,
             cluster_shift_increment=0.01,
         )
         env = DelayedImpactEnv(env_params)
@@ -129,20 +129,7 @@ def get_env(env_name: str):
         env = DelayedImpactEnv(env_params)
 
     elif env_name == "enem":
-        with open("data/enem.pkl", "rb") as f:
-            data = pkl.load(f)
-
-        env_params = DelayedImpactParams(
-            applicant_distribution=two_group_credit_clusters(
-                cluster_probabilities=data["cluster_probabilities"],
-                group_likelihoods=data["group_likelihoods"],
-                success_probabilities=data["success_probabilities"]
-            ),
-            bank_starting_cash=10_000,
-            interest_rate=1.5,
-            cluster_shift_increment=0.01,
-        )
-        env = EnemEnv(env_params)
+        env = EnemPoolEnv()
     return env
 
 
@@ -257,7 +244,14 @@ def evaluate(env, agent, num_eps, num_timesteps, name, seeds, eval_path):
             if done:
                 break
 
-                
+   
+    Path(f'{eval_path}').mkdir(parents=True, exist_ok=True)
+    eval_data = pd.DataFrame(eval_data)
+    eval_data.to_csv(f'{eval_path}/eval_data.csv', index=False)
+
+    if env.env.observation_space["applicant_features"].shape[0] > 10:
+        return eval_data
+
     predictions = []
     # calculate the output of the predictor net
     for g in range(env.state.params.num_groups):
@@ -271,15 +265,13 @@ def evaluate(env, agent, num_eps, num_timesteps, name, seeds, eval_path):
             obs = np.expand_dims(obs, axis=0)
             obs = torch.tensor(obs, dtype=torch.float32).to(device)
             pred = agent.policy.prob_label(obs).cpu().detach().numpy()
+            #action = agent.policy.prob_loan(obs)[0]
             predictions.append({
                 "g": g,
                 "x": x,
-                "pred" : pred.item()
+                "pred" : pred.item(),
+            #    "action" : action.item(),
             })
-
-    Path(f'{eval_path}').mkdir(parents=True, exist_ok=True)
-    eval_data = pd.DataFrame(eval_data)
-    eval_data.to_csv(f'{eval_path}/eval_data.csv', index=False)
 
     predictions = pd.DataFrame(predictions)
     predictions.to_csv(f'{eval_path}/predictions.csv', index=False)
@@ -361,7 +353,7 @@ def main():
     env = PPOEnvWrapper(
         env=env, 
         reward_fn=LendingReward, 
-        ep_timesteps=eval_timesteps, #config.environment.ep_timesteps,
+        ep_timesteps=config.environment.ep_timesteps,
         mu_type=config.environment.mu_type, 
         obs_type=config.environment.obs_type,
     )
@@ -369,7 +361,7 @@ def main():
         env=env,
         agent=agent,
         num_eps=eval_eps,
-        num_timesteps=eval_timesteps,
+        num_timesteps=config.environment.ep_timesteps,
         name=name,
         seeds=seeds,
         eval_path=eval_path
