@@ -4,6 +4,42 @@ import torch
 from gym import spaces
 from collections import deque
 
+from stable_baselines3.common.monitor import Monitor as SBMonitor
+
+class Monitor(SBMonitor):
+    def __init__(self, env, filename=None, allow_early_resets=True):
+        super(Monitor, self).__init__(env, filename, allow_early_resets)
+
+    
+    # ugly code to have the pred attribute
+    @property
+    def pred(self):
+        return getattr(self.env, 'pred', 0)
+
+    @pred.setter
+    def pred(self, value):
+        """
+        Set the prediction value in the environment.
+        """
+        if hasattr(self.env, 'pred'):
+            self.env.pred = value
+        else:
+            raise AttributeError("Environment does not have 'pred' attribute")
+        
+    @property
+    def prob_accept(self):
+        return getattr(self.env, 'prob_accept', 1)
+    
+    @prob_accept.setter
+    def prob_accept(self, value):
+        """
+        Set the probability of acceptance in the environment.
+        """
+        if hasattr(self.env, 'prob_accept'):
+            self.env.prob_accept = value
+        else:
+            raise AttributeError("Environment does not have 'prob_accept' attribute")
+
 class PPOEnvWrapper(gym.Wrapper):
     def __init__(self,
         env,

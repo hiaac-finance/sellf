@@ -194,7 +194,8 @@ class OnPolicyAlgorithm(BaseAlgorithm):
             label_pred = label_pred.cpu().numpy()
 
             # workaround to pass pred to the env
-            env.set_attr("pred", label_pred)
+            env.set_attr("pred", label_pred.item())
+            env.set_attr("prob_accept", prob_loan.item())
 
             # Rescale and perform action
             clipped_actions = actions

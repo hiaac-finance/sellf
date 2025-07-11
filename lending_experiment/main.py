@@ -23,7 +23,7 @@ import pickle as pkl
 from absl import flags
 from stable_baselines3.common.callbacks import CheckpointCallback
 from stable_baselines3.common.logger import configure
-from stable_baselines3.common.monitor import Monitor
+#from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv
 from yaml import full_load
 
@@ -33,7 +33,7 @@ from lending_experiment.environments import params, rewards
 from lending_experiment.environments.lending import DelayedImpactEnv, EnemEnv
 from lending_experiment.environments.lending_params import DelayedImpactParams, two_group_credit_clusters
 from lending_experiment.environments.rewards import LendingReward
-from lending_experiment.agents.ppo.ppo_wrapper_env import PPOEnvWrapper
+from lending_experiment.agents.ppo.ppo_wrapper_env import PPOEnvWrapper, Monitor
 from lending_experiment.agents.ppo.sb3.ppo import PPO
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
