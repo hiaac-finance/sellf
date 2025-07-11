@@ -30,6 +30,7 @@ import copy
 import enum
 from typing import List, Optional
 
+import pickle as pkl
 from absl import logging
 import attr
 from gym import spaces
@@ -98,6 +99,7 @@ class State(core.State):
     group = attr.ib(default=None)    # type: Optional[List[int]]
     group_id = attr.ib(default=None)    # type: Optional[int]
     will_default = attr.ib(default=None)    # type: Optional[bool]
+    idx = attr.ib(default=0)    # type: int
 
 
 class BaseLendingEnv(core.FairnessEnv):
@@ -404,3 +406,116 @@ class EnemEnv(BaseLendingEnv):
         self.observable_state_vars['applicant_features'] = multinomial.Multinomial(
                 self.initial_params.applicant_distribution.dim, 1)
         self.observation_space = spaces.Dict(self.observable_state_vars)
+
+
+class EnemPoolEnv(core.FairnessEnv):
+    metadata = {'render.modes': ['human']}
+    default_param_builder = lending_params.EnemPoolParams
+    group_membership_var = 'group'
+    _cash_updater = _CashUpdater()
+
+    def __init__(self, params = None):
+        params = (
+            self.default_param_builder() if params is None else params
+        )
+        self.action_space = spaces.Discrete(2)
+
+        accepted_space = spaces.Box(
+            low = 0, high=100_000, shape=(), dtype=np.float64)
+    
+        applicant_space = spaces.Box(
+            low=-params.min_observation,
+            high=params.max_observation,
+            dtype=np.float32,
+            shape=(params.n_features,)
+        )
+
+        group_space = spaces.MultiBinary(params.num_groups)
+
+        self.observable_state_vars = {
+            'bank_cash': accepted_space,
+            "applicant_features": applicant_space,
+            'group': group_space
+        }
+
+        with open(params.pool_data, 'rb') as f:
+            self.pool = pkl.load(f)
+        with open(params.base_model, 'rb') as f:
+            self.base_model = pkl.load(f)
+        super(EnemPoolEnv, self).__init__(params)
+        self._state_init()
+
+
+    def applicant_sampler(self):
+        available_idx = np.where(self.pool["available"])[0]
+        selected_idx = np.random.choice(
+            available_idx,
+            size=1,
+        )
+        self.state.idx = selected_idx[0]
+        self.state.group_id = self.pool["group"][selected_idx]
+        self.state.group = np.zeros(self.state.params.num_groups)
+        self.state.group[int(self.state.group_id)] = 1
+        self.state.applicant_features = self.pool["features"][selected_idx][0]
+        self.state.will_default = np.random.uniform() < self.pool["probs"][selected_idx][0]
+
+
+    def pool_updater(self, state, action, pool):
+        if action == LoanDecision.REJECT:
+            # update the age of the applicant
+            # get age idx
+            applicant_features = state.applicant_features
+            age_idx = np.argmax(
+                state.applicant_features[1:self.state.params.n_age + 1]
+            )
+            applicant_features[1 + age_idx] = 0
+            age_idx += 1  # +1 because the first feature is the group
+            applicant_features[1 + age_idx] = 1
+
+            pool["features"][state.idx] = applicant_features
+
+            # update the probs of the applicant
+            features = np.concatenate([state.group_id, applicant_features])
+            prob = self.base_model.predict_proba(
+                features.reshape(1, -1)
+            )[0, 1]
+
+            pool["probs"][state.idx] = prob
+        else:
+            return # do nothing on acceptance
+            # make the applicant unavailable
+            pool["available"][state.idx] = False
+
+
+    def _state_init(self, rng=None):
+        self.state = State(
+            params=copy.deepcopy(self.initial_params),
+            rng=rng or np.random.RandomState(),
+            bank_cash=self.initial_params.bank_starting_cash,
+        )
+        self.applicant_sampler()
+
+    def reset(self):
+        """Resets the environment."""
+        with open(self.initial_params.pool_data, 'rb') as f:
+            self.pool = pkl.load(f)
+        self._state_init(self.state.rng)
+        return super(EnemPoolEnv, self).reset()
+
+    def _is_done(self):
+        """Returns true if already accepted the maximum number of applicants."""
+        return self.state.bank_cash < 1
+    
+    def _step_impl(self, state, action):
+        # count one more accepted
+        self._cash_updater.update(self.state, action)
+        self.pool_updater(state, action, self.pool)
+        self.applicant_sampler()
+        return self.state
+
+
+    def render(self, mode='human'):
+        super(EnemPoolEnv, self).render(mode)
+
+        
+

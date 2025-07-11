@@ -277,3 +277,18 @@ class DelayedImpactParams(Params):
   # Probability mass that shifts away from a cluster due to a raise or
   # lowering of credit score in response to an accepted application.
   cluster_shift_increment = attr.ib(default=0.01)  # type: float
+
+@attr.s
+class EnemPoolParams(Params):
+  """Parameter class for the Enem pool environment."""
+  num_groups = attr.ib(default=2)  # type: int
+  max_accepted = attr.ib(default=1000)  # type: int
+  min_observation = attr.ib(default=0)
+  max_observation = attr.ib(default=1)
+  n_features = attr.ib(default=121)  # type: int
+  n_age = attr.ib(default=10)
+  pool_data = attr.ib(default="data/enem_pool.pkl")  # type: str
+  base_model = attr.ib(default="data/enem_model.pkl") # type: str
+  interest_rate = attr.ib(default = 0.3)
+  bank_starting_cash = attr.ib(default=1000.0)  # type: float
+
