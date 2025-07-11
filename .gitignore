@@ -12,4 +12,4 @@ __pycache__/
 data/
 **/config_files/
 log.txt
-exp.sh
+**/exp.sh
