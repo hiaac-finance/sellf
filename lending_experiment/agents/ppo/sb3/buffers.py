@@ -803,10 +803,10 @@ class ReplayMemory(BaseBuffer):
         self.reset()
 
     def reset(self) -> None:
-        self.observations = np.zeros((self.buffer_size,) + self.obs_shape, dtype=np.float32)
-        self.labels = np.zeros((self.buffer_size, 1), dtype=np.float32)
+        self.observations = np.zeros((0,) + self.obs_shape, dtype=np.float32)
+        self.labels = np.zeros((0, 1), dtype=np.float32)
         self.groups = np.zeros((self.buffer_size, 2), dtype=np.float32)
-        self.probs = np.zeros((self.buffer_size, 1), dtype=np.float32)
+        self.probs = np.zeros((0, 1), dtype=np.float32)
         self.pos = 0
 
     def add(self, obs: np.ndarray, label: np.ndarray, group: np.ndarray, prob: np.ndarray) -> None:
@@ -816,23 +816,32 @@ class ReplayMemory(BaseBuffer):
 
         if obs.shape[1] == 1:
             obs = obs.squeeze(axis=1)
-#        if group.shape[1] == 1:
- #           group = group.reshape((group.shape[0], 2))
 
         self.observations = np.concatenate((self.observations, obs), axis=0)
         self.labels = np.concatenate((self.labels, label), axis=0)
+        self.probs = np.concatenate((self.probs, prob.reshape(-1, 1)), axis=0)
   #      self.groups = np.concatenate((self.groups, group), axis=0)
   #      self.probs = np.concatenate((self.probs, prob.reshape(-1, 1)), axis=0)
 
         if self.observations.shape[0] > self.buffer_size:
             # sample to return to the original size
+            probs = self.probs.flatten() + 1e-8
+            inverse_probs = 1 / probs
+            # avoid extreme values
+            inverse_probs = np.clip(inverse_probs, 0.2, 0.8)
+            inverse_probs = inverse_probs / np.sum(inverse_probs)
+
+            # sample indices based on the inverse probabilities
             indices = np.random.choice(
-                self.observations.shape[0], size=self.buffer_size, replace=False
+                np.arange(self.observations.shape[0]),
+                size=self.buffer_size,
+                replace=True,
+                p=inverse_probs,
             )
             self.observations = self.observations[indices]
             self.labels = self.labels[indices]
            # self.groups = self.groups[indices]
-           # self.probs = self.probs[indices]
+            self.probs = self.probs[indices]
 
 
         # add an empty dimension to the observations
@@ -841,7 +850,7 @@ class ReplayMemory(BaseBuffer):
 
     def get(self, batch_size: Optional[int] = None) -> Generator[ReplayMemorySamples, None, None]:
         # Sample random indices
-        indices = np.random.permutation(self.buffer_size * self.n_envs)
+        indices = np.random.permutation(self.observations.shape[0])
         # Prepare the data
         if not self.generator_ready:
 
@@ -861,7 +870,7 @@ class ReplayMemory(BaseBuffer):
             batch_size = self.buffer_size * self.n_envs
 
         start_idx = 0
-        while start_idx < self.buffer_size * self.n_envs:
+        while start_idx < (self.observations.shape[0] - batch_size):
             yield self._get_samples(indices[start_idx : start_idx + batch_size])
             start_idx += batch_size
 
