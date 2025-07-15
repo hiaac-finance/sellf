@@ -76,6 +76,7 @@ class PPO(OnPolicyAlgorithm):
             beta_1: float = 0.25,
             beta_2: float = 0.,
             beta_3: float = 0.,
+            beta_reg: float = 0.1,
             omega: float = 0.1,
             n_steps: int = 2048,
             batch_size: int = 64,
@@ -158,6 +159,7 @@ class PPO(OnPolicyAlgorithm):
         self.beta_1 = beta_1
         self.beta_2 = beta_2
         self.beta_3 = beta_3
+        self.beta_reg = beta_reg
         self.omega = omega
         self.batch_size = batch_size
         self.n_epochs = n_epochs
@@ -199,6 +201,7 @@ class PPO(OnPolicyAlgorithm):
         pg_losses, value_losses = [], []
         clip_fractions = []
         pred_losses = []
+        reg_losses = []
 
         continue_training = True
         
@@ -214,32 +217,61 @@ class PPO(OnPolicyAlgorithm):
             prob=probs
         )
 
+        # calculate the rejection rate of each group
+        g0_idx = (self.rollout_buffer.groups[:, 0, 0] == 1).nonzero()
+        g1_idx = (self.rollout_buffer.groups[:, 0, 1] == 1).nonzero()
+        accept_g0 = self.rollout_buffer.actions[g0_idx].mean().item()
+        accept_g1 = self.rollout_buffer.actions[g1_idx].mean().item()
+        reject_g0 = 1 - accept_g0
+        reject_g1 = 1 - accept_g1
+
+
+        n_epochs_start = 1
         # learn the prediction model
         if self.ad_reg == "sellf":
-            for epoch in range(1):
-                pred_losses = []
+            for epoch in range(n_epochs_start):
                 for rollout_data in self.memory.get(self.batch_size):
                     preds = self.policy.prob_label(rollout_data.observations)
                     with th.no_grad():
                         prob_loan = self.policy.prob_loan(rollout_data.observations)
                         prob_loan = th.clamp(prob_loan, min=1e-2, max=1 - 1e-2)
+
+                    g0_batch = (rollout_data.groups[:, 0] == 1).nonzero()
+                    g1_batch = (rollout_data.groups[:, 1] == 1).nonzero()
+
+                    # bce term
                     pred_loss = pred_criterion(preds, rollout_data.labels)
-                    pred_loss = pred_loss / prob_loan
-                    pred_loss = pred_loss.mean()
+                    pred_loss = pred_loss * (1 / prob_loan)
+                    pred_loss = pred_loss.sum() / (1 / prob_loan).sum()
+
+                    # regularization term
+                    epsilon = (preds - rollout_data.labels)
+                    weights = (1 - prob_loan) / prob_loan
+                    epsilon = epsilon * weights
+
+                    reg_term_g0 = (reject_g0 * epsilon[g0_batch]).sum() / weights[g0_batch].sum()
+                    reg_term_g1 = (reject_g1 * epsilon[g1_batch]).sum() / weights[g1_batch].sum()
+
+                    reg_loss = (reg_term_g0 - reg_term_g1) ** 2
+
                     pred_losses.append(pred_loss.item())
+                    reg_losses.append(reg_loss.item())
                     # Optimization step
-                    self.policy.optimizer.zero_grad()
-                    pred_loss.backward()
+                    #self.policy.optimizer.zero_grad()
+
+                    loss = pred_loss + self.beta_reg * reg_loss
+                    self.policy.pred_optimizer.zero_grad()
+                    loss.backward()
                     # Clip grad norm
                     th.nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
-                    self.policy.optimizer.step()
+                    #self.policy.optimizer.step()
+                    self.policy.pred_optimizer.step()
 
-        # calculate acceptance rate from rollout buffer
-        g0_idx = (self.rollout_buffer.groups[:, 0, 0] == 1).nonzero()
-        g1_idx = (self.rollout_buffer.groups[:, 0, 1] == 1).nonzero()
-        accept_g0 = self.rollout_buffer.actions[g0_idx].mean().item()
-        accept_g1 = self.rollout_buffer.actions[g1_idx].mean().item()
 
+                self.policy.scheduler.step()
+            
+            n_epochs_start = 1
+        
         # calculate the error rate
         with th.no_grad():
             predictions = self.policy.prob_label(torch.Tensor(self.rollout_buffer.observations[:, 0, :]).to(self.device))
@@ -247,6 +279,12 @@ class PPO(OnPolicyAlgorithm):
 
         error_g0 = (predictions[g0_idx] - self.rollout_buffer.labels[g0_idx]).mean().item()
         error_g1 = (predictions[g1_idx] - self.rollout_buffer.labels[g1_idx]).mean().item()
+
+        # calculate error on rejected population
+        g0_rejected_idx = (self.rollout_buffer.groups[:, 0, 0] == 1 ) & (self.rollout_buffer.actions[:, 0, 0] == 0)
+        g1_rejected_idx = ((self.rollout_buffer.groups[:, 0, 1] == 1) & (self.rollout_buffer.actions[:, 0, 0] == 0))
+        error_rejected_g0 = (predictions[g0_rejected_idx] - self.rollout_buffer.labels[g0_rejected_idx]).mean().item()
+        error_rejected_g1 = (predictions[g1_rejected_idx] - self.rollout_buffer.labels[g1_rejected_idx]).mean().item()
 
         #b_term_0 = (1 - accept_g0) * error_rejected_g0
         #b_term_1 = (1 - accept_g1) * error_rejected_g1
@@ -412,12 +450,15 @@ class PPO(OnPolicyAlgorithm):
         self.logger.record("train/loss", loss.item())
         self.logger.record("train/explained_variance", explained_var)
         self.logger.record("train/pred_loss", np.mean(pred_losses))
+        self.logger.record("train/reg_loss", np.mean(reg_losses))
         self.logger.record("train/accept_rate", np.mean(self.rollout_buffer.actions.flatten()))
         self.logger.record("train/pos_rate", np.mean(self.rollout_buffer.labels.flatten()))
         self.logger.record("train/accept_g0", accept_g0)
         self.logger.record("train/accept_g1", accept_g1)
         self.logger.record("train/error_g0", error_g0)
         self.logger.record("train/error_g1", error_g1)
+        self.logger.record("train/error_rejected_g0", error_rejected_g0)
+        self.logger.record("train/error_rejected_g1", error_rejected_g1)
         #self.logger.record("train/B_0", b_term_0)
         #self.logger.record("train/B_1", b_term_1)
         self.logger.record("train/delta_b_term", delta_b_term)

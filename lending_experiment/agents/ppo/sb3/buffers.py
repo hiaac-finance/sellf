@@ -843,10 +843,6 @@ class ReplayMemory(BaseBuffer):
             self.probs = self.probs[indices]
 
 
-        # add an empty dimension to the observations
-      #  self.observations = np.expand_dims(self.observations, axis=1)
-       # self.groups = np.expand_dims(self.groups, axis=1)
-
     def get(self, batch_size: Optional[int] = None) -> Generator[ReplayMemorySamples, None, None]:
         # Sample random indices
         indices = np.random.permutation(self.observations.shape[0])
