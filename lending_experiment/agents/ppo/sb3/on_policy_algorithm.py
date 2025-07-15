@@ -189,8 +189,10 @@ class OnPolicyAlgorithm(BaseAlgorithm):
                 # Convert to pytorch tensor or to TensorDict
                 obs_tensor = obs_as_tensor(self._last_obs, self.device)
                 actions, values, log_probs = self.policy(obs_tensor)
+                prob_loan = self.policy.prob_loan(obs_tensor)
                 label_pred = self.policy.predict_label(obs_tensor)
             actions = actions.cpu().numpy()
+            prob_loan = prob_loan.cpu().numpy()
             label_pred = label_pred.cpu().numpy()
 
             # workaround to pass pred to the env

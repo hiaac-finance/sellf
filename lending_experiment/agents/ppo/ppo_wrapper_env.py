@@ -84,8 +84,10 @@ class PPOEnvWrapper(gym.Wrapper):
         self.y_real_hist = [deque(maxlen=self.window) for _ in range(2)]
         self.y_pred_hist = [deque(maxlen=self.window) for _ in range(2)]
         self.pred_hist = [deque(maxlen=self.window) for _ in range(2)]
+        self.prob_accept_hist = [deque(maxlen=self.window) for _ in range(2)]
         self.a_hist = [deque(maxlen=self.window) for _ in range(2)]
         self.pred = 0
+        self.prob_accept = 1
         self.mu = np.zeros(2,)
         self.mu_real = np.zeros(2,)
         self.rejection = np.zeros(2,)
@@ -110,8 +112,10 @@ class PPOEnvWrapper(gym.Wrapper):
         self.y_real_hist = [deque(maxlen=self.window) for _ in range(2)]
         self.y_pred_hist = [deque(maxlen=self.window) for _ in range(2)]
         self.pred_hist = [deque(maxlen=self.window) for _ in range(2)]
+        self.prob_accept_hist = [deque(maxlen=self.window) for _ in range(2)]
         self.a_hist = [deque(maxlen=self.window) for _ in range(2)]
         self.pred = 0
+        self.prob_accept = 1
         self.mu = np.ones(2,)
         self.mu_real = np.ones(2,)
         self.rejection = np.zeros(2,)
@@ -125,6 +129,7 @@ class PPOEnvWrapper(gym.Wrapper):
             y_real = np.array(self.y_real_hist[i])
             y_pred = np.array(self.y_pred_hist[i])
             pred = np.array(self.pred_hist[i])
+            prob_accept = np.array(self.prob_accept_hist[i])
             action = np.array(self.a_hist[i])
 
 
@@ -156,8 +161,10 @@ class PPOEnvWrapper(gym.Wrapper):
             # calculate rejection terms
             self.rejection[i] = np.mean(action == 0) if len(action) > 0 else 0
             error = pred - y_real
-            # calculate error in the accepted group
-            self.error_rejection[i] = np.mean(error[action == 1]) if (action).sum() > 0 else 0
+            # calculate error in the accepted group weighted by the probability of acceptance
+            weights = (1 - prob_accept) / prob_accept
+            error = error * weights
+            self.error_rejection[i] = error.sum() / weights.sum() if (action).sum() > 0 else 0
             if self.mu_type == "qualification" or self.mu_type == "accuracy":
                 self.b_term[i] = self.rejection[i] * self.error_rejection[i]
             else:
@@ -181,9 +188,11 @@ class PPOEnvWrapper(gym.Wrapper):
         else:
             pred = label
 
+        self.prob_accept = max(0.1, min(0.9, self.prob_accept))
         self.y_real_hist[group_id].append(label)
         self.y_pred_hist[group_id].append(pred)
         self.pred_hist[group_id].append(self.pred)
+        self.prob_accept_hist[group_id].append(self.prob_accept)
         self.a_hist[group_id].append(action)
         self.compute_mu()
 
