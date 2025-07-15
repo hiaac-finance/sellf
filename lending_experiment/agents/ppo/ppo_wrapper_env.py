@@ -45,6 +45,7 @@ class PPOEnvWrapper(gym.Wrapper):
         env,
         reward_fn,
         ep_timesteps=2000,
+        relaxed_timesteps=200,
         mu_type = "qualification",
         obs_type = "imputation",
         zeta_0 = 1,
@@ -68,6 +69,7 @@ class PPOEnvWrapper(gym.Wrapper):
 
         self.timestep = 0
         self.ep_timesteps = ep_timesteps
+        self.relaxed_timesteps = relaxed_timesteps
         self.mu_type = mu_type
         self.obs_type = obs_type
         self.zeta_0 = zeta_0
@@ -190,6 +192,10 @@ class PPOEnvWrapper(gym.Wrapper):
         self.delta_delta = self.delta - old_delta
         self.delta_b_term = np.abs(self.b_term[0] - self.b_term[1])
 
+        if self.timestep < self.relaxed_timesteps:
+            ratio = self.timestep / self.relaxed_timesteps
+            self.delta *= ratio
+            self.delta_real *= ratio
 
         obs, _, done, info = self.env.step(action)
 
