@@ -805,7 +805,7 @@ class ReplayMemory(BaseBuffer):
     def reset(self) -> None:
         self.observations = np.zeros((0,) + self.obs_shape, dtype=np.float32)
         self.labels = np.zeros((0, 1), dtype=np.float32)
-        self.groups = np.zeros((self.buffer_size, 2), dtype=np.float32)
+        self.groups = np.zeros((0, 2), dtype=np.float32)
         self.probs = np.zeros((0, 1), dtype=np.float32)
         self.pos = 0
 
@@ -820,8 +820,7 @@ class ReplayMemory(BaseBuffer):
         self.observations = np.concatenate((self.observations, obs), axis=0)
         self.labels = np.concatenate((self.labels, label), axis=0)
         self.probs = np.concatenate((self.probs, prob.reshape(-1, 1)), axis=0)
-  #      self.groups = np.concatenate((self.groups, group), axis=0)
-  #      self.probs = np.concatenate((self.probs, prob.reshape(-1, 1)), axis=0)
+        self.groups = np.concatenate((self.groups, group.reshape(-1, 2)), axis=0)
 
         if self.observations.shape[0] > self.buffer_size:
             # sample to return to the original size
@@ -836,11 +835,11 @@ class ReplayMemory(BaseBuffer):
                 np.arange(self.observations.shape[0]),
                 size=self.buffer_size,
                 replace=True,
-                p=inverse_probs,
+                # p=inverse_probs,
             )
             self.observations = self.observations[indices]
             self.labels = self.labels[indices]
-           # self.groups = self.groups[indices]
+            self.groups = self.groups[indices]
             self.probs = self.probs[indices]
 
 
