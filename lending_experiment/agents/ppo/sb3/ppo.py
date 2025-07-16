@@ -76,7 +76,7 @@ class PPO(OnPolicyAlgorithm):
             beta_1: float = 0.25,
             beta_2: float = 0.,
             beta_3: float = 0.,
-            beta_reg: float = 0.1,
+            beta_reg: float = 0.35,
             omega: float = 0.1,
             n_steps: int = 2048,
             batch_size: int = 64,
@@ -234,7 +234,8 @@ class PPO(OnPolicyAlgorithm):
                     preds = self.policy.prob_label(rollout_data.observations)
                     with th.no_grad():
                         prob_loan = self.policy.prob_loan(rollout_data.observations)
-                        prob_loan = th.clamp(prob_loan, min=1e-2, max=1 - 1e-2)
+                        # print 0.05 quantile of prob_loan
+                        prob_loan = th.clamp(prob_loan, min=0.05, max=0.95)
 
                     g0_batch = (rollout_data.groups[:, 0] == 1).nonzero()
                     g1_batch = (rollout_data.groups[:, 1] == 1).nonzero()

@@ -285,8 +285,8 @@ class EnemPoolParams(Params):
   max_accepted = attr.ib(default=1000)  # type: int
   min_observation = attr.ib(default=0)
   max_observation = attr.ib(default=1)
-  n_features = attr.ib(default=121)  # type: int
-  n_age = attr.ib(default=10)
+  n_features = attr.ib(default=118)  # type: int
+  n_age = attr.ib(default=6)
   pool_data = attr.ib(default="data/enem_pool.pkl")  # type: str
   base_model = attr.ib(default="data/enem_model.pkl") # type: str
   interest_rate = attr.ib(default = 0.3)
