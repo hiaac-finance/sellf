@@ -86,7 +86,7 @@ class PPO(OnPolicyAlgorithm):
             clip_range: Union[float, Schedule] = 0.2,
             clip_range_vf: Union[None, float, Schedule] = None,
             normalize_advantage: bool = True,
-            ent_coef: float = 0.0,
+            ent_coef: float = 0.2,
             vf_coef: float = 0.5,
             max_grad_norm: float = 0.5,
             use_sde: bool = False,
@@ -260,7 +260,7 @@ class PPO(OnPolicyAlgorithm):
                     # Optimization step
                     #self.policy.optimizer.zero_grad()
 
-                    loss = pred_loss + self.beta_reg * reg_loss
+                    loss = pred_loss# + self.beta_reg * reg_loss
                     self.policy.pred_optimizer.zero_grad()
                     loss.backward()
                     # Clip grad norm
@@ -361,7 +361,7 @@ class PPO(OnPolicyAlgorithm):
                                                torch.tensor(1, dtype=torch.float32).to(self.device), 
                                                torch.tensor(0, dtype=torch.float32).to(self.device)
                                             )
-                    error_term = error_term * vt_term_zero
+                    #error_term = error_term * vt_term_zero
 
 
                     advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
