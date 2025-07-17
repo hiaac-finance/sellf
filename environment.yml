@@ -1,4 +1,4 @@
-name: iclr_causal_lens
+name: fairrl
 channels:
   - defaults
 dependencies:

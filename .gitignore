@@ -13,3 +13,5 @@ data/
 **/config_files/
 log.txt
 **/exp.sh
+
+figures/
