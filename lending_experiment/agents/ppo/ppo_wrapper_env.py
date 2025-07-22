@@ -160,11 +160,16 @@ class PPOEnvWrapper(gym.Wrapper):
 
             # calculate rejection terms
             self.rejection[i] = np.mean(action == 0) if len(action) > 0 else 0
-            error = pred - y_real
-            # calculate error in the accepted group weighted by the probability of acceptance
-            weights = (1 - prob_accept) / prob_accept
-            error = error * weights
-            self.error_rejection[i] = error.sum() / weights.sum() if (action).sum() > 0 else 0
+
+            if action.sum() > 0:
+                error = pred - y_real
+                error = error[action == 1]
+                weights = prob_accept[action == 1]
+                weights = (1 - weights) / weights
+                weights = np.clip(weights, 0.05, 0.95)
+                self.error_rejection[i] = error.sum() / weights.sum()
+            else:
+                self.error_rejection[i] = 0
             if self.mu_type == "qualification" or self.mu_type == "accuracy":
                 self.b_term[i] = self.rejection[i] * self.error_rejection[i]
             else:
@@ -188,7 +193,7 @@ class PPOEnvWrapper(gym.Wrapper):
         else:
             pred = label
 
-        self.prob_accept = max(0.1, min(0.9, self.prob_accept))
+        self.prob_accept = self.prob_accept + 1e-6
         self.y_real_hist[group_id].append(label)
         self.y_pred_hist[group_id].append(pred)
         self.pred_hist[group_id].append(self.pred)

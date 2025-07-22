@@ -468,8 +468,8 @@ class EnemPoolEnv(core.FairnessEnv):
             age_idx = np.argmax(
                 state.applicant_features[1:self.state.params.n_age + 1]
             )
-            applicant_features[1 + age_idx] = 0
-            age_idx += 1  # +1 because the first feature is the group
+            applicant_features[1 + age_idx] = 0 # +1 because the first feature is the group
+            age_idx = min(age_idx + 1, self.state.params.n_age - 1)
             applicant_features[1 + age_idx] = 1
 
             pool["features"][state.idx] = applicant_features

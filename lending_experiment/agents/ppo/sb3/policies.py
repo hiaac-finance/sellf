@@ -157,7 +157,7 @@ class PredActorCriticPolicy(ActorCriticPolicy):
             )
             self.scheduler = lr_scheduler.ExponentialLR(
                 self.pred_optimizer,
-                gamma=0.99,
+                gamma=0.97,
             )
 
         # Init weights: use orthogonal initialization

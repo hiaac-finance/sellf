@@ -206,14 +206,20 @@ class PPO(OnPolicyAlgorithm):
         continue_training = True
         
         # add rollout data to memory
-        obs = torch.Tensor(self.rollout_buffer.observations).to(self.device)
+        actions = self.rollout_buffer.actions
+        obs = self.rollout_buffer.observations[actions[:, 0, 0] == 1]
+        labels = self.rollout_buffer.labels[actions[:, 0, 0] == 1]
+        groups = self.rollout_buffer.groups[actions[:, 0, 0] == 1]
+
         with th.no_grad():
+            obs = th.Tensor(obs).to(self.device)
             probs = self.policy.prob_loan(obs).cpu().numpy()
+            obs = obs.cpu().numpy()
         
         self.memory.add(
-            obs=self.rollout_buffer.observations,
-            label=self.rollout_buffer.labels,
-            group=self.rollout_buffer.groups,
+            obs=obs,
+            label=labels,
+            group=groups,
             prob=probs
         )
 
@@ -253,14 +259,25 @@ class PPO(OnPolicyAlgorithm):
                     reg_term_g0 = (reject_g0 * epsilon[g0_batch]).sum() / weights[g0_batch].sum()
                     reg_term_g1 = (reject_g1 * epsilon[g1_batch]).sum() / weights[g1_batch].sum()
 
+                    #print(f"reject_g0: {reject_g0:.2f}")
+                    #print(f"reject_g1: {reject_g1:.2f}")
+                    #print(f"epsilon_g0: {epsilon[g0_batch].mean().item():.2f}")
+                    #print(f"epsilon_g1: {epsilon[g1_batch].mean().item():.2f}")
+                    #print(f"weights_g0: {weights[g0_batch].mean().item():.2f}")
+                    #print(f"weights_g1: {weights[g1_batch].mean().item():.2f}")
+                    #print("--------")
+
                     reg_loss = (reg_term_g0 - reg_term_g1) ** 2
+
+                    if g0_batch.shape[0] == 0 or g1_batch.shape[0] == 0:
+                        reg_loss = th.tensor(0.0, device=self.device)
 
                     pred_losses.append(pred_loss.item())
                     reg_losses.append(reg_loss.item())
                     # Optimization step
                     #self.policy.optimizer.zero_grad()
 
-                    loss = pred_loss# + self.beta_reg * reg_loss
+                    loss = pred_loss + self.beta_reg * reg_loss
                     self.policy.pred_optimizer.zero_grad()
                     loss.backward()
                     # Clip grad norm
