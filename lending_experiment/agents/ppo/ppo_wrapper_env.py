@@ -6,20 +6,22 @@ from collections import deque
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score
 from sklearn.model_selection import train_test_split
+# remove sklearn convergence warning
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning, module='sklearn')
 
 from stable_baselines3.common.monitor import Monitor as SBMonitor
 
 
-def error_bound(X_0, X_1, error_source):
+def error_bound(X_0, X_1, error_source, model):
     """Estimate the error on the rejected samples using the Proxy-A distance."""
     if X_0.shape[0] == 0 or X_1.shape[0] == 0:
         return 10
     Y = np.concatenate([np.zeros(len(X_0)), np.ones(len(X_1))], axis=0)
     X = np.concatenate([X_0, X_1], axis=0)
     X_train, X_test, Y_train, Y_test = train_test_split(
-        X, Y, test_size=0.2, random_state=42
+        X, Y, test_size=0.2, random_state=42, stratify=Y
     )
-    model = LogisticRegression(class_weight="balanced")
     model.fit(X_train, Y_train)
     acc = accuracy_score(Y_test, model.predict(X_test))
     if acc < 0.5:
@@ -126,12 +128,13 @@ class PPOEnvWrapper(gym.Wrapper):
         self.delta_delta = 0
 
         # my addition
-        self.window = 100
+        self.window = 1_000
         self.y_real_hist = [deque(maxlen=self.window) for _ in range(2)]
         self.y_pred_hist = [deque(maxlen=self.window) for _ in range(2)]
         self.pred_hist = [deque(maxlen=self.window) for _ in range(2)]
         self.prob_accept_hist = [deque(maxlen=self.window) for _ in range(2)]
         self.a_hist = [deque(maxlen=self.window) for _ in range(2)]
+        self.x_hist = [deque(maxlen=self.window) for _ in range(2)]
         self.pred = 0
         self.prob_accept = 1
         self.mu = np.zeros(2,)
@@ -160,13 +163,23 @@ class PPOEnvWrapper(gym.Wrapper):
         self.pred_hist = [deque(maxlen=self.window) for _ in range(2)]
         self.prob_accept_hist = [deque(maxlen=self.window) for _ in range(2)]
         self.a_hist = [deque(maxlen=self.window) for _ in range(2)]
+        self.x_hist = [deque(maxlen=self.window) for _ in range(2)]
         self.pred = 0
         self.prob_accept = 1
+        self.prob_predict =1
         self.mu = np.ones(2,)
         self.mu_real = np.ones(2,)
         self.rejection = np.zeros(2,)
         self.error_rejection = np.zeros(2,)
         self.b_term = np.zeros(2,)
+
+        self.discriminator = [LogisticRegression(
+            class_weight="balanced", 
+            solver="saga", 
+            warm_start=True, 
+            max_iter = 25,
+            tol=1e-3,
+        ) for _ in range(2)]
 
         return self.process_observation(self.env.reset())
     
@@ -177,6 +190,7 @@ class PPOEnvWrapper(gym.Wrapper):
             pred = np.array(self.pred_hist[i])
             prob_accept = np.array(self.prob_accept_hist[i])
             action = np.array(self.a_hist[i])
+            x = np.array(self.x_hist[i])
 
 
             # calculate first mu_real
@@ -205,24 +219,25 @@ class PPOEnvWrapper(gym.Wrapper):
                 self.mu[i] = self.mu_real[i]
 
             # calculate rejection terms
+
+            self.b_term[i] = 0
+            continue
+        
             self.rejection[i] = np.mean(action == 0) if len(action) > 0 else 0
 
-            if action.sum() > 0:
-                error = pred - y_real
-                error = error[action == 1]
-                weights = prob_accept[action == 1]
-                weights = (1 - weights) / weights
-                weights = np.clip(weights, 0.05, 0.95)
-                self.error_rejection[i] = error.sum() / weights.sum()
+            error_source = np.abs(pred[action == 1] - y_real[action == 1]).mean() if action.sum() > 0 else 0
+            error_target = np.abs(y_pred[action == 0] - y_real[action == 0]).mean() if (action == 0).sum() > 0 else 0
+            x_0 = x[action == 0]
+            x_1 = x[action == 1]
+            if len(x) > 100:
+                error_target_bound = error_bound(x_0, x_1, error_source, self.discriminator[i])
             else:
-                self.error_rejection[i] = 0
-            if self.mu_type == "qualification" or self.mu_type == "accuracy":
-                self.b_term[i] = self.rejection[i] * self.error_rejection[i]
-            else:
-                if len(y_pred) == 0 or np.mean(y_pred) == 0:
-                    self.b_term[i] = 1
-                else:
-                    self.b_term[i] = 1 - self.rejection[i] * self.error_rejection[i] / np.mean(y_pred)
+                error_target_bound = 0
+
+            self.b_term[i] = error_target_bound * self.rejection[i]
+            #print(f"Group {i}, r(s) : {self.rejection[i]:.2f} e(s) : {error_source:.2f} e(t) : {error_target:.2f} e(t) bound : {error_target_bound:.2f}")
+
+        #print("")
             
 
 
@@ -245,6 +260,7 @@ class PPOEnvWrapper(gym.Wrapper):
         self.pred_hist[group_id].append(self.pred)
         self.prob_accept_hist[group_id].append(self.prob_accept)
         self.a_hist[group_id].append(action)
+        self.x_hist[group_id].append(self.env.state.applicant_features)
         self.compute_mu()
 
         self.delta = np.abs(self.mu[0] - self.mu[1])

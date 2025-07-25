@@ -15,6 +15,19 @@ from stable_baselines3.common.utils import explained_variance, get_schedule_fn
 
 from lending_experiment.agents.ppo.sb3.on_policy_algorithm import OnPolicyAlgorithm
 
+from geomloss import SamplesLoss
+
+def estimate_domain_shift(obs_accepted, obs_rejected):
+    """Estimate the domain shift between the accepted and rejected populations."""
+    wloss = SamplesLoss(loss="sinkhorn", p=1, blur=0.01)
+
+    # calculate the domain shift between the accepted and rejected populations
+    dist_distance = wloss(
+        obs_accepted,
+        obs_rejected,
+    )
+    return dist_distance
+
 
 class PPO(OnPolicyAlgorithm):
     """
@@ -86,7 +99,7 @@ class PPO(OnPolicyAlgorithm):
             clip_range: Union[float, Schedule] = 0.2,
             clip_range_vf: Union[None, float, Schedule] = None,
             normalize_advantage: bool = True,
-            ent_coef: float = 0.2,
+            ent_coef: float = 0.,
             vf_coef: float = 0.5,
             max_grad_norm: float = 0.5,
             use_sde: bool = False,
@@ -203,7 +216,7 @@ class PPO(OnPolicyAlgorithm):
         pred_losses = []
 
         continue_training = True
-        
+
         # add rollout data to memory
         actions = self.rollout_buffer.actions
         obs = self.rollout_buffer.observations[actions[:, 0, 0] == 1]
@@ -223,11 +236,6 @@ class PPO(OnPolicyAlgorithm):
             prob=probs
         )
 
-        # calculate the rejection rate of each group
-        g0_idx = (self.rollout_buffer.groups[:, 0, 0] == 1).nonzero()
-        g1_idx = (self.rollout_buffer.groups[:, 0, 1] == 1).nonzero()
-        accept_g0 = self.rollout_buffer.actions[g0_idx].mean().item()
-        accept_g1 = self.rollout_buffer.actions[g1_idx].mean().item()
 
         n_steps = 50
         # learn the prediction model
@@ -260,28 +268,38 @@ class PPO(OnPolicyAlgorithm):
         
         n_steps = 5
 
-        # calculate the error rate
+        # estimate error on the rejected population using domain shift
         with th.no_grad():
             predictions = self.policy.prob_label(torch.Tensor(self.rollout_buffer.observations[:, 0, :]).to(self.device))
-            predictions = predictions.cpu().numpy()
 
-        error_g0 = (predictions[g0_idx] - self.rollout_buffer.labels[g0_idx]).mean().item()
-        error_g1 = (predictions[g1_idx] - self.rollout_buffer.labels[g1_idx]).mean().item()
+        labels = torch.Tensor(self.rollout_buffer.labels[:, 0]).to(self.device)
+        error_accepted = []
+        error_rejected = []
+        error_rejected_estimate = []
+        accept_rate = []
+        accepted_all_idx = (self.rollout_buffer.actions[:, 0, 0] == 1)
+        error_accepted_all = (predictions[accepted_all_idx] - labels[accepted_all_idx]).abs().mean()
+        for g_i in range(2):
+            accepted_idx = (self.rollout_buffer.groups[:, 0, g_i] == 1) & (self.rollout_buffer.actions[:, 0, 0] == 1)
+            rejected_idx = (self.rollout_buffer.groups[:, 0, g_i] == 1) & (self.rollout_buffer.actions[:, 0, 0] == 0)
+            error_accepted.append((predictions[accepted_idx] - labels[accepted_idx]).abs().mean())
+            error_rejected.append((predictions[rejected_idx] - labels[rejected_idx]).abs().mean()) # not used
 
-        # calculate error on rejected population
-        g0_rejected_idx = (self.rollout_buffer.groups[:, 0, 0] == 1 ) & (self.rollout_buffer.actions[:, 0, 0] == 0)
-        g1_rejected_idx = ((self.rollout_buffer.groups[:, 0, 1] == 1) & (self.rollout_buffer.actions[:, 0, 0] == 0))
-        error_rejected_g0 = (predictions[g0_rejected_idx] - self.rollout_buffer.labels[g0_rejected_idx]).mean().item()
-        error_rejected_g1 = (predictions[g1_rejected_idx] - self.rollout_buffer.labels[g1_rejected_idx]).mean().item()
+            obs_accepted = torch.Tensor(self.rollout_buffer.observations[accepted_idx, 0, :]).to(self.device)
+            obs_rejected = torch.Tensor(self.rollout_buffer.observations[rejected_idx, 0, :]).to(self.device)
 
-        #b_term_0 = (1 - accept_g0) * error_rejected_g0
-        #b_term_1 = (1 - accept_g1) * error_rejected_g1
+            accept_rate.append(obs_accepted.shape[0] / (obs_accepted.shape[0] + obs_rejected.shape[0]))
 
-        delta = self.rollout_buffer.deltas.mean().item()
-        delta_delta = self.rollout_buffer.delta_deltas.mean().item()
-        delta_b_term = self.rollout_buffer.delta_b_terms.mean().item()
-        delta_real = self.rollout_buffer.delta_reals.mean().item()
-    
+            obs_accepted_all = torch.Tensor(self.rollout_buffer.observations[accepted_all_idx, 0, :]).to(self.device)
+            dist_distance = estimate_domain_shift(obs_accepted_all, obs_rejected)
+
+            error_rejected_estimate.append(
+                error_accepted_all + dist_distance
+            )
+
+            print(f"Group {g_i}: e(S) = {error_accepted_all:.4f}, e(T): {error_rejected[-1]:.4f}, hat e(T): {error_rejected_estimate[-1]:.4f}")
+
+            
         # train for n_epochs epochs
         for epoch in range(self.n_epochs):
             approx_kl_divs = []
@@ -399,7 +417,17 @@ class PPO(OnPolicyAlgorithm):
 
                 entropy_losses.append(entropy_loss.item())
 
-                loss = policy_loss + self.ent_coef * entropy_loss + self.vf_coef * value_loss
+                # Accept rate disparity loss
+                g0_idx = (rollout_data.groups[:, 0] == 1).nonzero()
+                g1_idx = (rollout_data.groups[:, 1] == 1).nonzero()
+                prob_accept = self.policy.prob_loan(rollout_data.observations)
+
+                accept_g0_batch = (1 - prob_accept[g0_idx].to(th.float32).mean()) * error_rejected[0]
+                accept_g1_batch = (1 - prob_accept[g1_idx].to(th.float32).mean()) * error_rejected[1]
+                delta_accept = (accept_g0_batch - accept_g1_batch) ** 2
+
+
+                loss = policy_loss + self.ent_coef * entropy_loss + self.vf_coef * value_loss + 10 * delta_accept
 
                 # Calculate approximate form of reverse KL Divergence for early stopping
                 # see issue #417: https://github.com/DLR-RM/stable-baselines3/issues/417
@@ -440,18 +468,23 @@ class PPO(OnPolicyAlgorithm):
         self.logger.record("train/pred_loss", np.mean(pred_losses))
         self.logger.record("train/accept_rate", np.mean(self.rollout_buffer.actions.flatten()))
         self.logger.record("train/pos_rate", np.mean(self.rollout_buffer.labels.flatten()))
-        self.logger.record("train/accept_g0", accept_g0)
-        self.logger.record("train/accept_g1", accept_g1)
-        self.logger.record("train/error_g0", error_g0)
-        self.logger.record("train/error_g1", error_g1)
-        self.logger.record("train/error_rejected_g0", error_rejected_g0)
-        self.logger.record("train/error_rejected_g1", error_rejected_g1)
-        #self.logger.record("train/B_0", b_term_0)
-        #self.logger.record("train/B_1", b_term_1)
-        self.logger.record("train/delta_b_term", delta_b_term)
-        self.logger.record("train/delta", delta)
-        self.logger.record("train/delta_delta", delta_delta)
-        self.logger.record("train/delta_real", delta_real)
+        self.logger.record("train/accept_g0", accept_rate[0])
+        self.logger.record("train/accept_g1", accept_rate[1])
+        self.logger.record("train/error_accepted", error_accepted_all.item())
+        self.logger.record("train/error_a0_g0", error_rejected[0].item())
+        self.logger.record("train/error_a0_g1", error_rejected[1].item())
+        self.logger.record("train/error_a1_g0", error_accepted[0].item())
+        self.logger.record("train/error_a1_g1", error_accepted[1].item())
+        self.logger.record("train/error_hat_a0_g0", error_rejected_estimate[0].item())
+        self.logger.record("train/error_hat_a0_g1", error_rejected_estimate[1].item())
+        self.logger.record("train/b_g0", (1 - accept_rate[0]) * error_rejected[0].item())
+        self.logger.record("train/b_g1", (1 - accept_rate[1]) * error_rejected[1].item())
+        self.logger.record("train/b_hat_g0", (1 - accept_rate[0]) * error_rejected_estimate[0].item())
+        self.logger.record("train/b_hat_g1", (1 - accept_rate[1]) * error_rejected_estimate[1].item())
+        self.logger.record("train/delta_b_term", self.rollout_buffer.delta_b_terms.mean().item())
+        self.logger.record("train/delta", self.rollout_buffer.deltas.mean().item())
+        self.logger.record("train/delta_delta", self.rollout_buffer.delta_deltas.mean().item())
+        self.logger.record("train/delta_real", self.rollout_buffer.delta_reals.mean().item())
 
         if hasattr(self.policy, "log_std"):
             self.logger.record("train/std", th.exp(self.policy.log_std).mean().item())
