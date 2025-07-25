@@ -77,6 +77,7 @@ class PredActorCriticPolicy(ActorCriticPolicy):
         net_arch: Optional[List[Union[int, Dict[str, List[int]]]]] = None,
         activation_fn: Type[nn.Module] = nn.Tanh,
         use_predictor: bool = False,
+        predictor_type : str = "linear",
         ortho_init: bool = True,
         use_sde: bool = False,
         log_std_init: float = 0.0,
@@ -91,6 +92,7 @@ class PredActorCriticPolicy(ActorCriticPolicy):
         optimizer_kwargs: Optional[Dict[str, Any]] = None,
     ):  
         self.use_predictor = use_predictor
+        self.predictor_type = predictor_type
         super(PredActorCriticPolicy, self).__init__(
             observation_space,
             action_space,
@@ -137,18 +139,24 @@ class PredActorCriticPolicy(ActorCriticPolicy):
 
         self.value_net = nn.Linear(self.mlp_extractor.latent_dim_vf, 1)
         if self.use_predictor:
-            self.predictor_net = nn.Sequential(
-                nn.Linear(self.features_dim - 2, 64),
-                nn.BatchNorm1d(64),
-                nn.ReLU(),
-                nn.Dropout(0.5),
-                nn.Linear(64, 32),
-                nn.BatchNorm1d(32),
-                nn.ReLU(),
-                nn.Dropout(0.5),
-                nn.Linear(32, 1),
-                nn.Sigmoid(),
-            )
+            if self.predictor_type == "mlp":
+                self.predictor_net = nn.Sequential(
+                    nn.Linear(self.features_dim - 2, 64),
+                    nn.BatchNorm1d(64),
+                    nn.ReLU(),
+                    nn.Dropout(0.5),
+                    nn.Linear(64, 32),
+                    nn.BatchNorm1d(32),
+                    nn.ReLU(),
+                    nn.Dropout(0.5),
+                    nn.Linear(32, 1),
+                    nn.Sigmoid(),
+                )
+            elif self.predictor_type == "linear":
+                self.predictor_net = nn.Sequential(
+                    nn.Linear(self.features_dim - 2, 1),
+                    nn.Sigmoid(),
+                )
 
             self.pred_optimizer = self.optimizer_class(
                 self.predictor_net.parameters(),
