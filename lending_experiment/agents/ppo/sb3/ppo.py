@@ -78,7 +78,7 @@ class PPO(OnPolicyAlgorithm):
             beta_3: float = 0.,
             beta_reg: float = 0.35,
             omega: float = 0.1,
-            n_steps: int = 2048,
+            n_steps: int = 2000,
             batch_size: int = 64,
             n_epochs: int = 10,
             gamma: float = 0.99,
@@ -201,7 +201,6 @@ class PPO(OnPolicyAlgorithm):
         pg_losses, value_losses = [], []
         clip_fractions = []
         pred_losses = []
-        reg_losses = []
 
         continue_training = True
         
@@ -210,6 +209,7 @@ class PPO(OnPolicyAlgorithm):
         obs = self.rollout_buffer.observations[actions[:, 0, 0] == 1]
         labels = self.rollout_buffer.labels[actions[:, 0, 0] == 1]
         groups = self.rollout_buffer.groups[actions[:, 0, 0] == 1]
+
 
         with th.no_grad():
             obs = th.Tensor(obs).to(self.device)
@@ -228,68 +228,38 @@ class PPO(OnPolicyAlgorithm):
         g1_idx = (self.rollout_buffer.groups[:, 0, 1] == 1).nonzero()
         accept_g0 = self.rollout_buffer.actions[g0_idx].mean().item()
         accept_g1 = self.rollout_buffer.actions[g1_idx].mean().item()
-        reject_g0 = 1 - accept_g0
-        reject_g1 = 1 - accept_g1
 
-
-        n_epochs_start = 1
+        n_steps = 50
         # learn the prediction model
         if self.ad_reg == "sellf":
-            for epoch in range(n_epochs_start):
-                for rollout_data in self.memory.get(self.batch_size):
-                    preds = self.policy.prob_label(rollout_data.observations)
-                    with th.no_grad():
-                        prob_loan = self.policy.prob_loan(rollout_data.observations)
-                        # print 0.05 quantile of prob_loan
-                        prob_loan = th.clamp(prob_loan, min=0.05, max=0.95)
+            for i, rollout_data in enumerate(self.memory.get(self.batch_size)):
+                preds = self.policy.prob_label(rollout_data.observations)
+                with th.no_grad():
+                    prob_loan = self.policy.prob_loan(rollout_data.observations)
+                    # print 0.05 quantile of prob_loan
+                    prob_loan = th.clamp(prob_loan, min=0.05, max=0.95)
 
-                    g0_batch = (rollout_data.groups[:, 0] == 1).nonzero()
-                    g1_batch = (rollout_data.groups[:, 1] == 1).nonzero()
+                # bce term
+                pred_loss = pred_criterion(preds, rollout_data.labels)
+                pred_loss = pred_loss * (1 / prob_loan)
+                pred_loss = pred_loss.sum() / (1 / prob_loan).sum()
+                pred_losses.append(pred_loss.item())
 
-                    # bce term
-                    pred_loss = pred_criterion(preds, rollout_data.labels)
-                    pred_loss = pred_loss * (1 / prob_loan)
-                    pred_loss = pred_loss.sum() / (1 / prob_loan).sum()
+                loss = pred_loss
+                self.policy.pred_optimizer.zero_grad()
+                loss.backward()
+                # Clip grad norm
+                th.nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
+                #self.policy.optimizer.step()
+                self.policy.pred_optimizer.step()
 
-                    # regularization term
-                    epsilon = (preds - rollout_data.labels)
-                    weights = (1 - prob_loan) / prob_loan
-                    epsilon = epsilon * weights
+                if i > n_steps:
+                    break
 
-                    reg_term_g0 = (reject_g0 * epsilon[g0_batch]).sum() / weights[g0_batch].sum()
-                    reg_term_g1 = (reject_g1 * epsilon[g1_batch]).sum() / weights[g1_batch].sum()
-
-                    #print(f"reject_g0: {reject_g0:.2f}")
-                    #print(f"reject_g1: {reject_g1:.2f}")
-                    #print(f"epsilon_g0: {epsilon[g0_batch].mean().item():.2f}")
-                    #print(f"epsilon_g1: {epsilon[g1_batch].mean().item():.2f}")
-                    #print(f"weights_g0: {weights[g0_batch].mean().item():.2f}")
-                    #print(f"weights_g1: {weights[g1_batch].mean().item():.2f}")
-                    #print("--------")
-
-                    reg_loss = (reg_term_g0 - reg_term_g1) ** 2
-
-                    if g0_batch.shape[0] == 0 or g1_batch.shape[0] == 0:
-                        reg_loss = th.tensor(0.0, device=self.device)
-
-                    pred_losses.append(pred_loss.item())
-                    reg_losses.append(reg_loss.item())
-                    # Optimization step
-                    #self.policy.optimizer.zero_grad()
-
-                    loss = pred_loss + self.beta_reg * reg_loss
-                    self.policy.pred_optimizer.zero_grad()
-                    loss.backward()
-                    # Clip grad norm
-                    th.nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
-                    #self.policy.optimizer.step()
-                    self.policy.pred_optimizer.step()
-
-
-                self.policy.scheduler.step()
-            
-            n_epochs_start = 1
+            self.policy.scheduler.step()
         
+        n_steps = 5
+
         # calculate the error rate
         with th.no_grad():
             predictions = self.policy.prob_label(torch.Tensor(self.rollout_buffer.observations[:, 0, :]).to(self.device))
@@ -468,7 +438,6 @@ class PPO(OnPolicyAlgorithm):
         self.logger.record("train/loss", loss.item())
         self.logger.record("train/explained_variance", explained_var)
         self.logger.record("train/pred_loss", np.mean(pred_losses))
-        self.logger.record("train/reg_loss", np.mean(reg_losses))
         self.logger.record("train/accept_rate", np.mean(self.rollout_buffer.actions.flatten()))
         self.logger.record("train/pos_rate", np.mean(self.rollout_buffer.labels.flatten()))
         self.logger.record("train/accept_g0", accept_g0)
