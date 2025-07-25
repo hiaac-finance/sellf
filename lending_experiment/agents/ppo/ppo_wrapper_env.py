@@ -70,6 +70,21 @@ class Monitor(SBMonitor):
             self.env.prob_accept = value
         else:
             raise AttributeError("Environment does not have 'prob_accept' attribute")
+    
+    @property
+    def prob_predict(self):
+        return getattr(self.env, 'prob_predict', 1)
+
+    @prob_predict.setter
+    def prob_predict(self, value):
+        """
+        Set the probability of prediction in the environment.
+        """
+        if hasattr(self.env, 'prob_predict'):
+            self.env.prob_predict = value
+        else:
+            raise AttributeError("Environment does not have 'prob_predict' attribute")
+
 
 class PPOEnvWrapper(gym.Wrapper):
     def __init__(self,
