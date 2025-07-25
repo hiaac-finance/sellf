@@ -191,13 +191,16 @@ class OnPolicyAlgorithm(BaseAlgorithm):
                 actions, values, log_probs = self.policy(obs_tensor)
                 prob_loan = self.policy.prob_loan(obs_tensor)
                 label_pred = self.policy.predict_label(obs_tensor)
+                label_prob = self.policy.prob_label(obs_tensor)
             actions = actions.cpu().numpy()
             prob_loan = prob_loan.cpu().numpy()
             label_pred = label_pred.cpu().numpy()
+            label_prob = label_prob.cpu().numpy()
 
             # workaround to pass pred to the env
             env.set_attr("pred", label_pred.item())
             env.set_attr("prob_accept", prob_loan.item())
+            env.set_attr("prob_predict", label_prob.item())
 
             # Rescale and perform action
             clipped_actions = actions

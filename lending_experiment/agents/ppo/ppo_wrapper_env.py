@@ -3,8 +3,39 @@ import numpy as np
 import torch
 from gym import spaces
 from collections import deque
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score
+from sklearn.model_selection import train_test_split
 
 from stable_baselines3.common.monitor import Monitor as SBMonitor
+
+
+def error_bound(X_0, X_1, error_source):
+    """Estimate the error on the rejected samples using the Proxy-A distance."""
+    if X_0.shape[0] == 0 or X_1.shape[0] == 0:
+        return 10
+    Y = np.concatenate([np.zeros(len(X_0)), np.ones(len(X_1))], axis=0)
+    X = np.concatenate([X_0, X_1], axis=0)
+    X_train, X_test, Y_train, Y_test = train_test_split(
+        X, Y, test_size=0.2, random_state=42
+    )
+    model = LogisticRegression(class_weight="balanced")
+    model.fit(X_train, Y_train)
+    acc = accuracy_score(Y_test, model.predict(X_test))
+    if acc < 0.5:
+        Y_pred = 1 - model.predict(X_test)
+        acc = accuracy_score(Y_test, Y_pred)
+    err = 1 - acc
+
+    dist = 2 * (1 - 2 * err)
+    m = len(X_0)
+    d = X_0.shape[1]
+    delta = 0.05
+    c1 = 4 / m * np.sqrt(d * np.log(2 * np.exp(1) * m / d) + np.log(4 / delta))
+    c2 = 4 * np.sqrt( (d * np.log(2 * m) + np.log(4 / delta)) / m)
+
+    return error_source + dist #+ c1 + c2
+
 
 class Monitor(SBMonitor):
     def __init__(self, env, filename=None, allow_early_resets=True):
