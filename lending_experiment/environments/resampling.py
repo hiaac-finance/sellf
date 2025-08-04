@@ -4,7 +4,7 @@ import numpy as np
 
 from gym import spaces
 
-from environments import core
+from lending_experiment.environments import core
 
 
 @attr.s
@@ -69,7 +69,17 @@ class ResamplingEnv(core.FairnessEnv):
     metadata = {"render.modes": ["human"]}
     group_membership_var = "group"
 
-    def __init__(self, params):
+    def __init__(self, params, utility_method="accuracy", delta_method="full"):
+        assert utility_method in ["accuracy", "qualification", "tpr"]
+        assert delta_method in ["full", "observed", "accepted"]
+        if utility_method == "accuracy":
+            self.util_fn = AccUtil()
+        elif utility_method == "qualification":
+            self.util_fn = QualiUtil()
+        else:
+            self.util_fn = TprUtil()
+        self.utility_method = utility_method
+        self.delta_method = delta_method
         self.action_space = spaces.Discrete(2)
 
         resource_space = spaces.Box(
@@ -89,7 +99,6 @@ class ResamplingEnv(core.FairnessEnv):
             "group": group_space,
         }
 
-        self.util_fn = AccUtil()
         self.pop_init_utility = np.zeros(params.num_groups, dtype=np.float32)
         self.group_counts = np.zeros(params.num_groups, dtype=np.float32)
         self.pool = []
@@ -119,9 +128,9 @@ class ResamplingEnv(core.FairnessEnv):
 
     def _step_impl(self, state, action):
         self.update_resource(self.state, action)
-        self.update_applicant(self.state, action)
         self.update_utility(self.state, action)
         self.compute_disparity()
+        self.update_applicant(self.state, action)
         self.sample_applicant()
         return self.state
 
@@ -143,11 +152,20 @@ class ResamplingEnv(core.FairnessEnv):
     def update_utility(self, state, action):
         """Update the difference in utility for the current applicant. Also updates the utility in the pool."""
         new_utility = self.util_fn(state.label, action)
+        # If we are considering only accepted applicants, we should discard utility
+        if self.delta_method == "accepted" and action == 0:
+            new_utility = 0.0
         old_utility = self.pool[state.idx]["utility"]
         diff_utility = np.zeros(state.params.num_groups, dtype=np.float32)
         diff_utility[state.group.argmax()] = new_utility - old_utility
         state.diff_utility += diff_utility
         self.pool[state.idx]["utility"] = new_utility
+
+        # If we are considering only accepted applicants, we should update the counts
+        if self.delta_method == "accepted":
+            prev_action = self.pool[state.idx]["action"]
+            self.group_counts[state.group.argmax()] += action - prev_action
+
 
     def compute_disparity(self):
         cur_util = self.state.pop_init_utility + self.state.diff_utility
@@ -170,10 +188,27 @@ class ResamplingEnv(core.FairnessEnv):
         self.state.idx = selected
         return
 
-    def set_utility(self, idx, action):
-        label = self.pool[idx]["label"]
-        utility = self.util_fn(label, action)
-        self.pool[idx]["utility"] = utility
+    def set_action_pred(self, list_action, list_pred):
+        self.pop_init_utility = np.zeros(
+            self.initial_params.num_groups, dtype=np.float32
+        )
+        self.group_counts = np.zeros(self.initial_params.num_groups, dtype=np.float32)
+        for idx, (action, pred) in enumerate(zip(list_action, list_pred)):
+            self.pool[idx]["action"] = action
+            self.pool[idx]["pred"] = pred
+            label = self.pool[idx]["label"]
+            utility = self.util_fn(label, action)
+            g = self.pool[idx]["group"].argmax()
+            self.pool[idx]["utility"] = utility
+            self.pop_init_utility[g] += utility
+            self.group_counts[g] += 1
+            if self.delta_method == "accepted" and action == 0:
+                self.pop_init_utility[g] -= utility
+                self.group_counts[g] -= 1
+
+            
+        self.state.pop_init_utility = self.pop_init_utility
+        self.compute_disparity()
 
 
 class LendingEnv(ResamplingEnv):
@@ -216,8 +251,6 @@ class LendingEnv(ResamplingEnv):
                     "label": y,
                 }
             )
-            self.pop_init_utility[g] += 1
-            self.group_counts[g] += 1
 
     def update_applicant(self, state, action):
         if action == 0:
