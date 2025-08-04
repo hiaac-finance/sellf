@@ -267,3 +267,14 @@ class LendingEnv(ResamplingEnv):
         self.pool[idx]["features"][score] = 0
         self.pool[idx]["features"][new_score] = 1
         state.applicant_features = self.pool[idx]["features"]
+
+        success_probs = [
+            [0.1, 0.2, 0.45, 0.6, 0.65, 0.7, 0.7],
+            [0.1, 0.2, 0.45, 0.6, 0.65, 0.7, 0.7],
+        ]
+        group = np.argmax(state.group)
+        y = np.random.binomial(n=1, p=success_probs[group][new_score])
+        y = int(y)
+        self.pool[idx]["label"] = y
+        state.label = y
+        self.pool[idx]["action"] = action
