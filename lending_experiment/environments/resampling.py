@@ -6,23 +6,28 @@ from gym import spaces
 
 from environments import core
 
+
 @attr.s
-class UtilFunc():
+class UtilFunc:
     def __call__(self, label, action):
         """
         Calculate the utility based on the label and action.
         """
         pass
 
+
 class QualiUtil(UtilFunc):
     def __call__(self, label, action):
         return label
-    
+
+
 class AccUtil(UtilFunc):
     def __call__(self, label, action):
         return 1 if label == action else 0
 
+
 # TODO: implement true positive rate utility
+
 
 @attr.s
 class Params(core.Params):
@@ -44,14 +49,15 @@ class State(core.State):
     rng = attr.ib()
     params = attr.ib()
     resource = attr.ib()
-    utility = attr.ib(default=None)
-    utility_obs = attr.ib(default=None)
+    pop_init_utility = attr.ib(default=None)
+    diff_utility = attr.ib(default=None)
+    delta = attr.ib(default=0)
+    delta_delta = attr.ib(default=0)
 
     # features of the applicant
     applicant_features = attr.ib(default=None)
     group = attr.ib(default=None)
     label = attr.ib(default=None)
-    prediction = attr.ib(default = None)
     idx = attr.ib(default=None)
 
 
@@ -82,7 +88,13 @@ class ResamplingEnv(core.FairnessEnv):
             "applicant_features": applicant_space,
             "group": group_space,
         }
+
+        self.util_fn = AccUtil()
+        self.pop_init_utility = np.zeros(params.num_groups, dtype=np.float32)
+        self.group_counts = np.zeros(params.num_groups, dtype=np.float32)
+        self.pool = []
         self.load_pool(params)
+
         super(ResamplingEnv, self).__init__(params)
         self._state_init()
 
@@ -91,7 +103,10 @@ class ResamplingEnv(core.FairnessEnv):
             params=copy.deepcopy(self.initial_params),
             rng=rng or np.random.RandomState(),
             resource=self.initial_params.starting_resource,
+            diff_utility=np.zeros(self.initial_params.num_groups, dtype=np.float32),
+            pop_init_utility=self.pop_init_utility,
         )
+        self.compute_disparity()
         self.sample_applicant()
 
     def reset(self):
@@ -105,6 +120,8 @@ class ResamplingEnv(core.FairnessEnv):
     def _step_impl(self, state, action):
         self.update_resource(self.state, action)
         self.update_applicant(self.state, action)
+        self.update_utility(self.state, action)
+        self.compute_disparity()
         self.sample_applicant()
         return self.state
 
@@ -120,7 +137,29 @@ class ResamplingEnv(core.FairnessEnv):
         state.resource += state.label - params.cost
 
     def update_applicant(self, state, action):
+        # Implement logic to update the applicant based on the action taken
         pass
+
+    def update_utility(self, state, action):
+        """Update the difference in utility for the current applicant. Also updates the utility in the pool."""
+        new_utility = self.util_fn(state.label, action)
+        old_utility = self.pool[state.idx]["utility"]
+        diff_utility = np.zeros(state.params.num_groups, dtype=np.float32)
+        diff_utility[state.group.argmax()] = new_utility - old_utility
+        state.diff_utility += diff_utility
+        self.pool[state.idx]["utility"] = new_utility
+
+    def compute_disparity(self):
+        cur_util = self.state.pop_init_utility + self.state.diff_utility
+        cur_delta = self.state.delta
+        cur_util = np.divide(
+            cur_util,
+            self.group_counts,
+            out=np.zeros_like(cur_util),
+            where=self.group_counts != 0,
+        )
+        self.state.delta = np.max(cur_util) - np.min(cur_util)
+        self.state.delta_delta = self.state.delta - cur_delta
 
     def sample_applicant(self):
         selected = np.random.choice(len(self.pool), size=1)[0]
@@ -130,19 +169,12 @@ class ResamplingEnv(core.FairnessEnv):
         self.state.label = applicant["label"]
         self.state.idx = selected
         return
-    
-    def apply_models(self, policy, predictor):
-        """
-        Apply the policy to get the action and predicted label.
-        """
-        for i, applicant in enumerate(self.pool):
-            action = ...
-            prediction = ...
 
-            self.state.utility += self.util_fn(self.state.label, action)
-            self.state.utility_obs += self.util_fn(prediction, action)
+    def set_utility(self, idx, action):
+        label = self.pool[idx]["label"]
+        utility = self.util_fn(label, action)
+        self.pool[idx]["utility"] = utility
 
-            # TODO: finish this function
 
 class LendingEnv(ResamplingEnv):
     """
@@ -162,7 +194,6 @@ class LendingEnv(ResamplingEnv):
             [0.1, 0.2, 0.45, 0.6, 0.65, 0.7, 0.7],
             [0.1, 0.2, 0.45, 0.6, 0.65, 0.7, 0.7],
         ]
-        self.pool = []
 
         num_groups = len(groups_probs)
         num_features = len(cluster_probs[0])
@@ -185,6 +216,8 @@ class LendingEnv(ResamplingEnv):
                     "label": y,
                 }
             )
+            self.pop_init_utility[g] += 1
+            self.group_counts[g] += 1
 
     def update_applicant(self, state, action):
         if action == 0:
