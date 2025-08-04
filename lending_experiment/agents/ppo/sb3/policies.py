@@ -154,7 +154,7 @@ class PredActorCriticPolicy(ActorCriticPolicy):
                 )
             elif self.predictor_type == "linear":
                 self.predictor_net = nn.Sequential(
-                    nn.Linear(self.features_dim - 2, 1),
+                    nn.Linear(self.features_dim, 1),
                     nn.Sigmoid(),
                 )
 
@@ -218,8 +218,6 @@ class PredActorCriticPolicy(ActorCriticPolicy):
             return th.zeros((obs.shape[0]), dtype=th.float32, device=self.device)
         # Preprocess the observation if needed
         features = self.extract_features(obs)
-        if obs.shape[1] == self.features_dim:
-            features = features[:, :-2]
         return self.predictor_net(features)
     
     def predict_label(self, obs: th.Tensor) -> Tuple[th.Tensor]:
@@ -233,8 +231,6 @@ class PredActorCriticPolicy(ActorCriticPolicy):
             return th.zeros((obs.shape[0]), dtype=th.float32, device=self.device)
         # Preprocess the observation if needed
         features = self.extract_features(obs)
-        if obs.shape[1] == self.features_dim:
-            features = features[:, :-2]
         probs = self.predictor_net(features)
         # sample a uniform random number
         p = th.rand((obs.shape[0]), dtype=th.float32, device=self.device)

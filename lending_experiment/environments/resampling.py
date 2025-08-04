@@ -6,29 +6,6 @@ from gym import spaces
 
 from lending_experiment.environments import core
 
-
-@attr.s
-class UtilFunc:
-    def __call__(self, label, action):
-        """
-        Calculate the utility based on the label and action.
-        """
-        pass
-
-
-class QualiUtil(UtilFunc):
-    def __call__(self, label, action):
-        return label
-
-
-class AccUtil(UtilFunc):
-    def __call__(self, label, action):
-        return 1 if label == action else 0
-
-
-# TODO: implement true positive rate utility
-
-
 @attr.s
 class Params(core.Params):
     num_groups = attr.ib(default=2)
@@ -49,8 +26,6 @@ class State(core.State):
     rng = attr.ib()
     params = attr.ib()
     resource = attr.ib()
-    pop_init_utility = attr.ib(default=None)
-    diff_utility = attr.ib(default=None)
     delta = attr.ib(default=0)
     delta_delta = attr.ib(default=0)
 
@@ -58,6 +33,7 @@ class State(core.State):
     applicant_features = attr.ib(default=None)
     group = attr.ib(default=None)
     label = attr.ib(default=None)
+    pred = attr.ib(default=None)
     idx = attr.ib(default=None)
 
 
@@ -72,12 +48,6 @@ class ResamplingEnv(core.FairnessEnv):
     def __init__(self, params, utility_method="accuracy", delta_method="full"):
         assert utility_method in ["accuracy", "qualification", "tpr"]
         assert delta_method in ["full", "observed", "accepted"]
-        if utility_method == "accuracy":
-            self.util_fn = AccUtil()
-        elif utility_method == "qualification":
-            self.util_fn = QualiUtil()
-        else:
-            self.util_fn = TprUtil()
         self.utility_method = utility_method
         self.delta_method = delta_method
         self.action_space = spaces.Discrete(2)
@@ -99,8 +69,18 @@ class ResamplingEnv(core.FairnessEnv):
             "group": group_space,
         }
 
-        self.pop_init_utility = np.zeros(params.num_groups, dtype=np.float32)
-        self.group_counts = np.zeros(params.num_groups, dtype=np.float32)
+        self.init_utility_matrix = np.zeros(
+            (params.num_applicants, params.num_groups), dtype=np.float32
+        )
+        self.init_active_matrix = np.zeros(
+            (params.num_applicants, params.num_groups), dtype=np.float32
+        )
+        self.utility_matrix = np.zeros(
+            (params.num_applicants, params.num_groups), dtype=np.float32
+        )
+        self.active_matrix = np.zeros(
+            (params.num_applicants, params.num_groups), dtype=np.float32
+        )
         self.pool = []
         self.load_pool(params)
 
@@ -112,9 +92,9 @@ class ResamplingEnv(core.FairnessEnv):
             params=copy.deepcopy(self.initial_params),
             rng=rng or np.random.RandomState(),
             resource=self.initial_params.starting_resource,
-            diff_utility=np.zeros(self.initial_params.num_groups, dtype=np.float32),
-            pop_init_utility=self.pop_init_utility,
         )
+        self.utility_matrix = copy.deepcopy(self.init_utility_matrix)
+        self.active_matrix = copy.deepcopy(self.init_active_matrix)
         self.compute_disparity()
         self.sample_applicant()
 
@@ -128,7 +108,14 @@ class ResamplingEnv(core.FairnessEnv):
 
     def _step_impl(self, state, action):
         self.update_resource(self.state, action)
-        self.update_utility(self.state, action)
+        self.update_utility(
+            self.state.idx,
+            self.state.label,
+            self.state.pred,
+            np.argmax(self.state.group),
+            action,
+            init=False,
+        )
         self.compute_disparity()
         self.update_applicant(self.state, action)
         self.sample_applicant()
@@ -149,32 +136,58 @@ class ResamplingEnv(core.FairnessEnv):
         # Implement logic to update the applicant based on the action taken
         pass
 
-    def update_utility(self, state, action):
+    def update_utility(self, idx, label, pred, group_idx, action, init = False):
         """Update the difference in utility for the current applicant. Also updates the utility in the pool."""
-        new_utility = self.util_fn(state.label, action)
-        # If we are considering only accepted applicants, we should discard utility
-        if self.delta_method == "accepted" and action == 0:
-            new_utility = 0.0
-        old_utility = self.pool[state.idx]["utility"]
-        diff_utility = np.zeros(state.params.num_groups, dtype=np.float32)
-        diff_utility[state.group.argmax()] = new_utility - old_utility
-        state.diff_utility += diff_utility
-        self.pool[state.idx]["utility"] = new_utility
+        if self.delta_method == "full":
+            label = label
+            if self.utility_method == "accuracy":
+                utility_value = 1 if label == action else 0
+                active = 1
+            elif self.utility_method == "qualification":
+                utility_value = label
+                active = 1
+            elif self.utility_method == "tpr":
+                utility_value = action
+                active = 1 if action * label else 0
+        elif self.delta_method == "observed":
+            label = label if action == 1 else pred
+            if self.utility_method == "accuracy":
+                utility_value = 1 if label == action else 0
+                active = 1
+            elif self.utility_method == "qualification":
+                utility_value = label
+                active = 1
+            elif self.utility_method == "tpr":
+                utility_value = action
+                active = 1 if action * label else 0
+        elif self.delta_method == "accepted":
+            label = label
+            if self.utility_method == "accuracy":
+                utility_value = 1 if label == action else 0
+                active = 1 if action else 0
+            elif self.utility_method == "qualification":
+                utility_value = label
+                active = 1 if action else 0
+            elif self.utility_method == "tpr":
+                utility_value = action
+                active = 1 if action * label else 0
 
-        # If we are considering only accepted applicants, we should update the counts
-        if self.delta_method == "accepted":
-            prev_action = self.pool[state.idx]["action"]
-            self.group_counts[state.group.argmax()] += action - prev_action
-
+        if init:
+            self.init_utility_matrix[idx, group_idx] = utility_value
+            self.init_active_matrix[idx, group_idx] = active
+        else:
+            self.utility_matrix[idx, group_idx] = utility_value
+            self.active_matrix[idx, group_idx] = active
 
     def compute_disparity(self):
-        cur_util = self.state.pop_init_utility + self.state.diff_utility
+        cur_util = np.sum(self.utility_matrix, axis=0)
+        group_counts = np.sum(self.active_matrix, axis=0)
         cur_delta = self.state.delta
         cur_util = np.divide(
             cur_util,
-            self.group_counts,
+            group_counts,
             out=np.zeros_like(cur_util),
-            where=self.group_counts != 0,
+            where=group_counts != 0,
         )
         self.state.delta = np.max(cur_util) - np.min(cur_util)
         self.state.delta_delta = self.state.delta - cur_delta
@@ -185,29 +198,17 @@ class ResamplingEnv(core.FairnessEnv):
         self.state.applicant_features = applicant["features"]
         self.state.group = applicant["group"]
         self.state.label = applicant["label"]
+        self.state.pred = applicant["pred"]
         self.state.idx = selected
         return
 
     def set_action_pred(self, list_action, list_pred):
-        self.pop_init_utility = np.zeros(
-            self.initial_params.num_groups, dtype=np.float32
-        )
-        self.group_counts = np.zeros(self.initial_params.num_groups, dtype=np.float32)
         for idx, (action, pred) in enumerate(zip(list_action, list_pred)):
-            self.pool[idx]["action"] = action
-            self.pool[idx]["pred"] = pred
             label = self.pool[idx]["label"]
-            utility = self.util_fn(label, action)
-            g = self.pool[idx]["group"].argmax()
-            self.pool[idx]["utility"] = utility
-            self.pop_init_utility[g] += utility
-            self.group_counts[g] += 1
-            if self.delta_method == "accepted" and action == 0:
-                self.pop_init_utility[g] -= utility
-                self.group_counts[g] -= 1
+            group_idx = self.pool[idx]["group"].argmax()
+            self.pool[idx]["pred"] = pred
+            self.update_utility(idx, label, pred, group_idx, action, init = True)
 
-            
-        self.state.pop_init_utility = self.pop_init_utility
         self.compute_disparity()
 
 
@@ -215,9 +216,6 @@ class LendingEnv(ResamplingEnv):
     """
     Environment for lending experiments.
     """
-
-    def __init__(self, params):
-        super(LendingEnv, self).__init__(params)
 
     def load_pool(self, params):
         groups_probs = [0.5, 0.5]
@@ -249,6 +247,7 @@ class LendingEnv(ResamplingEnv):
                     "features": features,
                     "group": group,
                     "label": y,
+                    "pred": None,
                 }
             )
 
@@ -277,4 +276,3 @@ class LendingEnv(ResamplingEnv):
         y = int(y)
         self.pool[idx]["label"] = y
         state.label = y
-        self.pool[idx]["action"] = action

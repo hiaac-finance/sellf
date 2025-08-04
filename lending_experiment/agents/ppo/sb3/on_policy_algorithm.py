@@ -182,8 +182,7 @@ class OnPolicyAlgorithm(BaseAlgorithm):
             obs_tensor = obs_tensor.unsqueeze(0)
             action, _, _ = self.policy(obs_tensor)
             action = action.cpu().numpy()
-            pred = 0 # TODO: implement prediction logic
-            #env.env_method("set_action_pred", idx, action, pred)
+            pred = self.policy.predict_label(obs_tensor).item()
             action_list.append(action)
             pred_list.append(pred)
         
