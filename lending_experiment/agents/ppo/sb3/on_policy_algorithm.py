@@ -172,6 +172,27 @@ class OnPolicyAlgorithm(BaseAlgorithm):
         # Switch to eval mode (this affects batch norm / dropout)
         self.policy.set_training_mode(False)
 
+        start = time.time()
+        # first, predict for everyone in the pool
+        action_list = []
+        pred_list = []
+        for idx in range(env.get_attr("num_applicants")[0]):
+            obs = env.env_method("get_applicant_obs", idx)[0]
+            obs_tensor = obs_as_tensor(obs, self.device)
+            obs_tensor = obs_tensor.unsqueeze(0)
+            action, _, _ = self.policy(obs_tensor)
+            action = action.cpu().numpy()
+            pred = 0 # TODO: implement prediction logic
+            #env.env_method("set_action_pred", idx, action, pred)
+            action_list.append(action)
+            pred_list.append(pred)
+        
+        env.env_method("set_action_pred", action_list, pred_list)
+
+        end = time.time()
+        print(f"Prediction time for {env.get_attr('num_applicants')[0]} applicants: {end - start:.4f} seconds")
+        print(f"Delta: {env.get_attr('state')[0].delta}")
+
         n_steps = 0
         rollout_buffer.reset()
         # Sample new weights for the state dependent exploration
@@ -189,18 +210,18 @@ class OnPolicyAlgorithm(BaseAlgorithm):
                 # Convert to pytorch tensor or to TensorDict
                 obs_tensor = obs_as_tensor(self._last_obs, self.device)
                 actions, values, log_probs = self.policy(obs_tensor)
-                prob_loan = self.policy.prob_loan(obs_tensor)
-                label_pred = self.policy.predict_label(obs_tensor)
-                label_prob = self.policy.prob_label(obs_tensor)
+                #prob_loan = self.policy.prob_loan(obs_tensor)
+                #label_pred = self.policy.predict_label(obs_tensor)
+                #label_prob = self.policy.prob_label(obs_tensor)
             actions = actions.cpu().numpy()
-            prob_loan = prob_loan.cpu().numpy()
-            label_pred = label_pred.cpu().numpy()
-            label_prob = label_prob.cpu().numpy()
+            #prob_loan = prob_loan.cpu().numpy()
+            #label_pred = label_pred.cpu().numpy()
+            #label_prob = label_prob.cpu().numpy()
 
             # workaround to pass pred to the env
-            env.set_attr("pred", label_pred.item())
-            env.set_attr("prob_accept", prob_loan.item())
-            env.set_attr("prob_predict", label_prob.item())
+            #env.set_attr("pred", label_pred.item())
+            #env.set_attr("prob_accept", prob_loan.item())
+            #env.set_attr("prob_predict", label_prob.item())
 
             # Rescale and perform action
             clipped_actions = actions
@@ -209,7 +230,7 @@ class OnPolicyAlgorithm(BaseAlgorithm):
                 clipped_actions = np.clip(actions, self.action_space.low, self.action_space.high)
 
             state = env.get_attr("state")[0]
-            label = np.array([1 - state.will_default]).astype(np.float32)
+            label = np.array([state.label]).astype(np.float32)
             group = np.array([state.group]).astype(np.float32)
             
             new_obs, rewards, dones, infos = env.step(clipped_actions)
@@ -242,11 +263,12 @@ class OnPolicyAlgorithm(BaseAlgorithm):
                     rewards[idx] += self.gamma * terminal_value
 
 
-            delta = torch.tensor(np.array(env.get_attr('delta')))
-            delta_delta = torch.tensor(np.array(env.get_attr('delta_delta')))
-            delta_b_term = torch.tensor(np.array(env.get_attr('delta_b_term')))
-            delta_real = torch.tensor(np.array(env.get_attr('delta_real')))
-            
+            delta = torch.tensor(np.array([state.delta])).float()
+            delta_delta = torch.tensor(np.array([state.delta_delta])).float()
+            #delta_b_term = torch.tensor(np.array(env.get_attr('delta_b_term')))
+            #delta_real = torch.tensor(np.array(env.get_attr('delta_real')))
+            delta_b_term = torch.tensor(np.array([0])).float()
+            delta_real = torch.tensor(np.array([0])).float()
             rollout_buffer.add(self._last_obs, actions, label, group, rewards, self._last_episode_starts, values, log_probs, delta, delta_delta, delta_b_term, delta_real)
             self._last_obs = new_obs
             self._last_episode_starts = dones
