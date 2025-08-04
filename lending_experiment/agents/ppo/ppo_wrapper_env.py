@@ -88,7 +88,7 @@ class Monitor(SBMonitor):
             raise AttributeError("Environment does not have 'prob_predict' attribute")
 
 
-class PPOEnvWrapper(gym.Wrapper):
+class PPOEnvWrapper_old(gym.Wrapper):
     def __init__(self,
         env,
         reward_fn,
@@ -283,6 +283,54 @@ class PPOEnvWrapper(gym.Wrapper):
             zeta1=self.zeta_1
         )
 
+        self.timestep += 1
+        if self.timestep >= self.ep_timesteps:
+            done = True
+
+        return self.process_observation(obs), r, done, info
+
+
+class PPOEnvWrapper(gym.Wrapper):
+    def __init__(self,
+        env,
+        ep_timesteps=2000,
+    ):
+        super(PPOEnvWrapper, self).__init__(env)
+
+        self.observation_space = spaces.Box(
+            low=np.inf,
+            high=np.inf,
+            shape=(env.observation_space['applicant_features'].shape[0] + env.state.params.num_groups,),
+        )
+
+        self.action_space = spaces.Discrete(n=2)
+        self.env = env
+        self.timestep = 0
+        self.ep_timesteps = ep_timesteps
+        self.num_applicants = len(self.env.pool)
+
+    def get_applicant_obs(self, idx):
+        """Get the observation for a specific applicant."""
+        applicant = self.env.pool[idx]
+        obs = {
+            'applicant_features': applicant['features'],
+            'group': applicant['group'],
+        }
+        return self.process_observation(obs)
+
+    def process_observation(self, obs):
+        credit_score = obs['applicant_features']
+        group = obs['group']
+        return np.concatenate((credit_score, group), axis=0)
+
+    def reset(self):
+        self.timestep = 0
+        return self.process_observation(self.env.reset())
+    
+    def step(self, action):
+        old_resource = self.env.state.resource
+        obs, _, done, info = self.env.step(action)
+        r = self.env.state.resource - old_resource
         self.timestep += 1
         if self.timestep >= self.ep_timesteps:
             done = True
