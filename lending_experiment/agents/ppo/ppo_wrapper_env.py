@@ -323,7 +323,6 @@ class PPOEnvWrapper(gym.Wrapper):
         obs = torch.tensor(obs, dtype=torch.float32).to(self.policy.device)
         with torch.no_grad():
             pred = self.policy.predict_label(obs).cpu().numpy()[0]
-        print(pred)
         return pred
         
     def get_applicant_obs(self, idx):

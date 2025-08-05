@@ -106,7 +106,7 @@ def evaluate(env, agent, num_eps, num_timesteps, name, seeds, eval_path):
         # Make predictions for everyone
         action_list = []
         pred_list = []
-        for idx in range(env.get_attr("num_applicants")[0]):
+        for idx in range(env.num_applicants):
             obs = env.env_method("get_applicant_obs", idx)[0]
             obs_tensor = torch.tensor(obs, dtype=torch.float32).to(device)
             obs_tensor = obs_tensor.unsqueeze(0)

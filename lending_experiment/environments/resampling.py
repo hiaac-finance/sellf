@@ -49,7 +49,7 @@ class ResamplingEnv(core.FairnessEnv):
 
     def __init__(self, params, utility_method="accuracy", delta_method="full"):
         assert utility_method in ["accuracy", "qualification", "tpr"]
-        assert delta_method in ["full", "observed", "accepted"]
+        assert delta_method in ["full", "imputation", "accepted"]
         self.utility_method = utility_method
         self.delta_method = delta_method
         self.action_space = spaces.Discrete(2)
@@ -177,7 +177,7 @@ class ResamplingEnv(core.FairnessEnv):
 
         if self.delta_method == "full":
             pass # Full delta is already calculated in the utility_real_matrix
-        elif self.delta_method == "observed":
+        elif self.delta_method == "imputation":
             label = label if action == 1 else pred
             if self.utility_method == "accuracy":
                 utility_value = 1 if label == action else 0
