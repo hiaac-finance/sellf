@@ -191,14 +191,14 @@ class ResamplingEnv(core.FairnessEnv):
         elif self.delta_method == "accepted":
             label = label
             if self.utility_method == "accuracy":
-                utility_value = 1 if label == action else 0
+                utility_value = label * action
                 active = 1 if action else 0
             elif self.utility_method == "qualification":
-                utility_value = label
+                utility_value = label * action
                 active = 1 if action else 0
             elif self.utility_method == "tpr":
-                utility_value = action
-                active = 1 if action * label else 0
+                utility_value = label * action
+                active = 1 if action * label == 1 else 0
 
         if init:
             self.init_utility_matrix[idx, group_idx] = utility_value

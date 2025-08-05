@@ -65,7 +65,7 @@ def train(train_timesteps, env, config):
         policy_kwargs={
             "use_predictor": config.policy.use_predictor,
             "activation_fn": torch.nn.ReLU,
-            "net_arch": [32, dict(vf=[32], pi=[32])],
+            "net_arch": [256, 256, dict(vf=[256, 128], pi=[256, 128])],
         },
         verbose=0,
         omega=config.environment.omega,

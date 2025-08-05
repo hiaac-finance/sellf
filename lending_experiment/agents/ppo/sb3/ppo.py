@@ -89,7 +89,6 @@ class PPO(OnPolicyAlgorithm):
             beta_1: float = 0.25,
             beta_2: float = 0.,
             beta_3: float = 0.,
-            beta_reg: float = 0.35,
             omega: float = 0.1,
             n_steps: int = 2000,
             batch_size: int = 64,
@@ -172,7 +171,6 @@ class PPO(OnPolicyAlgorithm):
         self.beta_1 = beta_1
         self.beta_2 = beta_2
         self.beta_3 = beta_3
-        self.beta_reg = beta_reg
         self.omega = omega
         self.batch_size = batch_size
         self.n_epochs = n_epochs
@@ -274,6 +272,7 @@ class PPO(OnPolicyAlgorithm):
 
             print(f"Estimated error rejected g{group_idx}: {error_rejected_estimate.item():.4f} (real: {error.item():.4f}) - domain shift: {dist_distance.item():.4f}. Accepted error: {error_accepted.item():.4f}")
 
+        return error_rejected
 
     def train(self) -> None:
         """
@@ -297,8 +296,10 @@ class PPO(OnPolicyAlgorithm):
 
         if self.ad_reg == "sellf":
             self.train_predictor()
-        self.calc_predictor_error()
-        error_rejected = [th.Tensor([0.]).to(self.device), th.Tensor([0.]).to(self.device)]
+        if self.beta_3 > 0:
+            error_rejected = self.calc_predictor_error()
+        else:
+            error_rejected = [th.Tensor([0.]).to(self.device), th.Tensor([0.]).to(self.device)]
 
 
         # train for n_epochs epochs
@@ -394,17 +395,19 @@ class PPO(OnPolicyAlgorithm):
 
                 entropy_losses.append(entropy_loss.item())
 
-                # Accept rate disparity loss
-                g0_idx = (rollout_data.groups[:, 0] == 1).nonzero()
-                g1_idx = (rollout_data.groups[:, 1] == 1).nonzero()
-                prob_accept = self.policy.prob_loan(rollout_data.observations)
+                if self.beta_3 > 0:
+                    # Accept rate disparity loss
+                    g0_idx = (rollout_data.groups[:, 0] == 1).nonzero()
+                    g1_idx = (rollout_data.groups[:, 1] == 1).nonzero()
+                    prob_accept = self.policy.prob_loan(rollout_data.observations)
 
-                accept_g0_batch = (1 - prob_accept[g0_idx].to(th.float32).mean()) * error_rejected[0]
-                accept_g1_batch = (1 - prob_accept[g1_idx].to(th.float32).mean()) * error_rejected[1]
-                delta_accept = (accept_g0_batch - accept_g1_batch) ** 2
+                    accept_g0_batch = (1 - prob_accept[g0_idx].to(th.float32).mean()) * error_rejected[0]
+                    accept_g1_batch = (1 - prob_accept[g1_idx].to(th.float32).mean()) * error_rejected[1]
+                    delta_accept = (accept_g0_batch - accept_g1_batch) ** 2
+                else:
+                    delta_accept = th.tensor([0.]).to(self.device)
 
-
-                loss = policy_loss + self.ent_coef * entropy_loss + self.vf_coef * value_loss #+ 10 * delta_accept
+                loss = policy_loss + self.ent_coef * entropy_loss + self.vf_coef * value_loss + self.beta_3 * delta_accept
 
                 # Calculate approximate form of reverse KL Divergence for early stopping
                 # see issue #417: https://github.com/DLR-RM/stable-baselines3/issues/417
