@@ -51,6 +51,7 @@ class ResamplingEnv(core.FairnessEnv):
         self.utility_method = utility_method
         self.delta_method = delta_method
         self.action_space = spaces.Discrete(2)
+        self.predict_fn = lambda x : 0
 
         resource_space = spaces.Box(
             low=0.0,
@@ -276,3 +277,7 @@ class LendingEnv(ResamplingEnv):
         y = int(y)
         self.pool[idx]["label"] = y
         state.label = y
+
+        pred = self.predict_fn(self.pool[idx])
+        self.pool[idx]["pred"] = pred
+        state.pred = pred

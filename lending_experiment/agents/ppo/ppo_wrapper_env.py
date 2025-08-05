@@ -308,7 +308,24 @@ class PPOEnvWrapper(gym.Wrapper):
         self.timestep = 0
         self.ep_timesteps = ep_timesteps
         self.num_applicants = len(self.env.pool)
+        self.env.predict_fn = self._predict_fn
 
+    def set_agent(self, agent):
+        self.policy = agent.policy
+        
+    def _predict_fn(self, applicant):
+        obs = {
+            "applicant_features": applicant['features'],
+            "group": applicant['group'],
+        }
+        obs = self.process_observation(obs)
+        obs = np.array(obs).reshape(1, -1)
+        obs = torch.tensor(obs, dtype=torch.float32).to(self.policy.device)
+        with torch.no_grad():
+            pred = self.policy.predict_label(obs).cpu().numpy()[0]
+        print(pred)
+        return pred
+        
     def get_applicant_obs(self, idx):
         """Get the observation for a specific applicant."""
         applicant = self.env.pool[idx]
