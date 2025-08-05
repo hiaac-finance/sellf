@@ -29,6 +29,7 @@ class State(core.State):
     resource = attr.ib()
     delta = attr.ib(default=0)
     delta_delta = attr.ib(default=0)
+    delta_real = attr.ib(default=0)
 
     # features of the applicant
     applicant_features = attr.ib(default=None)
@@ -83,6 +84,18 @@ class ResamplingEnv(core.FairnessEnv):
         self.active_matrix = np.zeros(
             (params.num_applicants, params.num_groups), dtype=np.float32
         )
+        self.init_utility_real_matrix = np.zeros(
+            (params.num_applicants, params.num_groups), dtype=np.float32
+        )
+        self.init_active_real_matrix = np.zeros(
+            (params.num_applicants, params.num_groups), dtype=np.float32
+        )
+        self.utility_real_matrix = np.zeros(
+            (params.num_applicants, params.num_groups), dtype=np.float32
+        )
+        self.active_real_matrix = np.zeros(
+            (params.num_applicants, params.num_groups), dtype=np.float32
+        )
         self.pool = []
         self.load_pool(params)
 
@@ -97,6 +110,8 @@ class ResamplingEnv(core.FairnessEnv):
         )
         self.utility_matrix = copy.deepcopy(self.init_utility_matrix)
         self.active_matrix = copy.deepcopy(self.init_active_matrix)
+        self.utility_real_matrix = copy.deepcopy(self.init_utility_real_matrix)
+        self.active_real_matrix = copy.deepcopy(self.init_active_real_matrix)
         self.compute_disparity()
         self.sample_applicant()
 
@@ -143,17 +158,25 @@ class ResamplingEnv(core.FairnessEnv):
 
     def update_utility(self, idx, label, pred, group_idx, action, init = False):
         """Update the difference in utility for the current applicant. Also updates the utility in the pool."""
+        # First, calculate real utility
+        active = 1
+        if self.utility_method == "accuracy":
+            utility_value = 1 if label == action else 0
+        elif self.utility_method == "qualification":
+            utility_value = label
+        elif self.utility_method == "tpr":
+            utility_value = action
+            active = 1 if label == 1 else 0
+        
+        if init:
+            self.init_utility_real_matrix[idx, group_idx] = utility_value
+            self.init_active_real_matrix[idx, group_idx] = active
+        else:
+            self.utility_real_matrix[idx, group_idx] = utility_value
+            self.active_real_matrix[idx, group_idx] = active
+
         if self.delta_method == "full":
-            label = label
-            if self.utility_method == "accuracy":
-                utility_value = 1 if label == action else 0
-                active = 1
-            elif self.utility_method == "qualification":
-                utility_value = label
-                active = 1
-            elif self.utility_method == "tpr":
-                utility_value = action
-                active = 1 if action * label else 0
+            pass # Full delta is already calculated in the utility_real_matrix
         elif self.delta_method == "observed":
             label = label if action == 1 else pred
             if self.utility_method == "accuracy":
@@ -164,7 +187,7 @@ class ResamplingEnv(core.FairnessEnv):
                 active = 1
             elif self.utility_method == "tpr":
                 utility_value = action
-                active = 1 if action * label else 0
+                active = 1 if label == 1 else 0
         elif self.delta_method == "accepted":
             label = label
             if self.utility_method == "accuracy":
@@ -185,6 +208,18 @@ class ResamplingEnv(core.FairnessEnv):
             self.active_matrix[idx, group_idx] = active
 
     def compute_disparity(self):
+        # First, calculate real utility
+        cur_util = np.sum(self.utility_real_matrix, axis=0)
+        group_counts = np.sum(self.active_real_matrix, axis=0)
+        cur_util = np.divide(
+            cur_util,
+            group_counts,
+            out=np.zeros_like(cur_util),
+            where=group_counts != 0,
+        )
+        self.state.delta_real = np.max(cur_util) - np.min(cur_util)
+
+        # Then, calculate utility
         cur_util = np.sum(self.utility_matrix, axis=0)
         group_counts = np.sum(self.active_matrix, axis=0)
         cur_delta = self.state.delta
