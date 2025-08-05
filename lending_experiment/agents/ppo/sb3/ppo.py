@@ -195,6 +195,86 @@ class PPO(OnPolicyAlgorithm):
 
             self.clip_range_vf = get_schedule_fn(self.clip_range_vf)
 
+    def train_predictor(self) -> None:
+        """Train the predictor model using the accepted data from rollout buffer."""
+
+        pred_criterion = th.nn.BCELoss(reduction="none")
+
+        # add rollout data to memory
+        actions = self.rollout_buffer.actions
+        obs = self.rollout_buffer.observations[actions[:, 0, 0] == 1]
+        labels = self.rollout_buffer.labels[actions[:, 0, 0] == 1]
+        groups = self.rollout_buffer.groups[actions[:, 0, 0] == 1]
+
+        with th.no_grad():
+            obs = th.Tensor(obs).to(self.device)
+            probs = self.policy.prob_loan(obs).cpu().numpy()
+            obs = obs.cpu().numpy()
+        
+        self.memory.add(
+            obs=obs,
+            label=labels,
+            group=groups,
+            prob=probs
+        )
+
+        losses_hist = []
+        n_steps = 10
+        for i, rollout_data in enumerate(self.memory.get(self.batch_size)):
+            preds = self.policy.prob_label(rollout_data.observations)
+            with th.no_grad():
+                prob_loan = self.policy.prob_loan(rollout_data.observations)
+                prob_loan = th.clamp(prob_loan, min=0.05, max=0.95)
+
+            pred_loss = pred_criterion(preds, rollout_data.labels)
+            pred_loss = pred_loss * (1 / prob_loan)
+            pred_loss = pred_loss.sum() / (1 / prob_loan).sum()
+            losses_hist.append(pred_loss.item())
+
+            self.policy.pred_optimizer.zero_grad()
+            pred_loss.backward()
+            # Clip grad norm
+            th.nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
+            self.policy.pred_optimizer.step()
+            self.policy.scheduler.step()
+
+            if i >= n_steps:
+                break
+        
+        mean_loss = np.mean(losses_hist)
+        self.logger.record("train/pred_loss", mean_loss)
+
+    def calc_predictor_error(self):
+        """Estimate the predictor error on the rejected population using domain shift."""
+        predictions = []
+        with th.no_grad():
+            for rollout_data in self.rollout_buffer.get(self.batch_size):
+                preds = self.policy.prob_label(rollout_data.observations)
+                predictions.append(preds)
+                
+        predictions = th.cat(predictions).flatten()
+        labels = torch.Tensor(self.rollout_buffer.labels[:, 0]).to(self.device)
+
+        # First, calculate the error on the accepted population
+        print(self.rollout_buffer.actions.shape)
+        accepted_idx = (self.rollout_buffer.actions[:, 0] == 1)
+        error_accepted = (predictions[accepted_idx] - labels[accepted_idx]).abs().mean()
+        obs_accepted = torch.Tensor(self.rollout_buffer.observations[accepted_idx, :]).to(self.device)
+
+        error_rejected = []
+        # Now, calculate the error on the rejected population using domain shift
+        for group_idx in [0, 1]:
+            rejected_idx = (self.rollout_buffer.groups[:, group_idx] == 1) & (self.rollout_buffer.actions[:, 0] == 0)
+            error = (predictions[rejected_idx] - labels[rejected_idx]).abs().mean()
+
+            obs_rejected = torch.Tensor(self.rollout_buffer.observations[rejected_idx, :]).to(self.device)
+            dist_distance = estimate_domain_shift(obs_accepted, obs_rejected)
+            error_rejected_estimate = error_accepted + dist_distance
+            error_rejected.append(error_rejected_estimate)
+
+            print(f"Estimated error rejected g{group_idx}: {error_rejected_estimate.item():.4f} (real: {error.item():.4f}) - domain shift: {dist_distance.item():.4f}. Accepted error: {error_accepted.item():.4f}")
+
+
     def train(self) -> None:
         """
         Update policy using the currently gathered rollout buffer.
@@ -209,97 +289,18 @@ class PPO(OnPolicyAlgorithm):
         if self.clip_range_vf is not None:
             clip_range_vf = self.clip_range_vf(self._current_progress_remaining)
 
-        pred_criterion = th.nn.BCELoss(reduction="none")
         entropy_losses = []
         pg_losses, value_losses = [], []
         clip_fractions = []
-        pred_losses = []
 
         continue_training = True
 
-        # add rollout data to memory
-        actions = self.rollout_buffer.actions
-        obs = self.rollout_buffer.observations[actions[:, 0, 0] == 1]
-        labels = self.rollout_buffer.labels[actions[:, 0, 0] == 1]
-        groups = self.rollout_buffer.groups[actions[:, 0, 0] == 1]
-
-
-        with th.no_grad():
-            obs = th.Tensor(obs).to(self.device)
-            probs = self.policy.prob_loan(obs).cpu().numpy()
-            obs = obs.cpu().numpy()
-        
-        self.memory.add(
-            obs=obs,
-            label=labels,
-            group=groups,
-            prob=probs
-        )
-
-
-        n_steps = 50
-        # learn the prediction model
         if self.ad_reg == "sellf":
-            for i, rollout_data in enumerate(self.memory.get(self.batch_size)):
-                preds = self.policy.prob_label(rollout_data.observations)
-                with th.no_grad():
-                    prob_loan = self.policy.prob_loan(rollout_data.observations)
-                    # print 0.05 quantile of prob_loan
-                    prob_loan = th.clamp(prob_loan, min=0.05, max=0.95)
+            self.train_predictor()
+        self.calc_predictor_error()
+        error_rejected = [th.Tensor([0.]).to(self.device), th.Tensor([0.]).to(self.device)]
 
-                # bce term
-                pred_loss = pred_criterion(preds, rollout_data.labels)
-                pred_loss = pred_loss * (1 / prob_loan)
-                pred_loss = pred_loss.sum() / (1 / prob_loan).sum()
-                pred_losses.append(pred_loss.item())
 
-                loss = pred_loss
-                self.policy.pred_optimizer.zero_grad()
-                loss.backward()
-                # Clip grad norm
-                th.nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
-                #self.policy.optimizer.step()
-                self.policy.pred_optimizer.step()
-
-                if i > n_steps:
-                    break
-
-            self.policy.scheduler.step()
-        
-        n_steps = 5
-
-        # estimate error on the rejected population using domain shift
-        with th.no_grad():
-            predictions = self.policy.prob_label(torch.Tensor(self.rollout_buffer.observations[:, 0, :]).to(self.device))
-
-        labels = torch.Tensor(self.rollout_buffer.labels[:, 0]).to(self.device)
-        error_accepted = []
-        error_rejected = []
-        error_rejected_estimate = []
-        accept_rate = []
-        accepted_all_idx = (self.rollout_buffer.actions[:, 0, 0] == 1)
-        error_accepted_all = (predictions[accepted_all_idx] - labels[accepted_all_idx]).abs().mean()
-        for g_i in range(2):
-            accepted_idx = (self.rollout_buffer.groups[:, 0, g_i] == 1) & (self.rollout_buffer.actions[:, 0, 0] == 1)
-            rejected_idx = (self.rollout_buffer.groups[:, 0, g_i] == 1) & (self.rollout_buffer.actions[:, 0, 0] == 0)
-            error_accepted.append((predictions[accepted_idx] - labels[accepted_idx]).abs().mean())
-            error_rejected.append((predictions[rejected_idx] - labels[rejected_idx]).abs().mean()) # not used
-
-            obs_accepted = torch.Tensor(self.rollout_buffer.observations[accepted_idx, 0, :]).to(self.device)
-            obs_rejected = torch.Tensor(self.rollout_buffer.observations[rejected_idx, 0, :]).to(self.device)
-
-            accept_rate.append(obs_accepted.shape[0] / (obs_accepted.shape[0] + obs_rejected.shape[0]))
-
-            obs_accepted_all = torch.Tensor(self.rollout_buffer.observations[accepted_all_idx, 0, :]).to(self.device)
-            dist_distance = estimate_domain_shift(obs_accepted_all, obs_rejected)
-
-            error_rejected_estimate.append(
-                error_accepted_all + dist_distance
-            )
-
-            print(f"Group {g_i}: e(S) = {error_accepted_all:.4f}, e(T): {error_rejected[-1]:.4f}, hat e(T): {error_rejected_estimate[-1]:.4f}")
-
-            
         # train for n_epochs epochs
         for epoch in range(self.n_epochs):
             approx_kl_divs = []
@@ -318,8 +319,6 @@ class PPO(OnPolicyAlgorithm):
                 values = values.flatten()
                 # Advantages shape: (batch_size,)
                 advantages = rollout_data.advantages
-
-                pred_loss = torch.Tensor([0.]).to(self.device)
 
                 # Advantage regularization for fairness here
                 if self.ad_reg == "pocar":
@@ -349,32 +348,10 @@ class PPO(OnPolicyAlgorithm):
                         -rollout_data.deltas + torch.tensor(self.omega / 2, dtype=torch.float32)
                     )
 
-                    div_cond = torch.where(rollout_data.deltas > torch.tensor(self.omega / 2, dtype=torch.float32).to(self.device),
-                                           torch.tensor(1, dtype=torch.float32).to(self.device),
-                                           torch.tensor(0, dtype=torch.float32).to(self.device))
-                    div_term = torch.min(torch.zeros(rollout_data.delta_deltas.shape[0]).to(self.device),
-                                         -div_cond * rollout_data.delta_deltas)
-
-                    # error term is equal to the negative value of delta_b_term
-                    error_term = torch.min(
-                        torch.zeros(rollout_data.delta_b_terms.shape[0]).to(self.device),
-                        -rollout_data.delta_b_terms + torch.tensor(self.omega / 2, dtype=torch.float32)
-                    )
-
-                    # only apply error_term if vt_term is zero
-                    vt_term_zero = torch.where(vt_term == 0, 
-                                               torch.tensor(1, dtype=torch.float32).to(self.device), 
-                                               torch.tensor(0, dtype=torch.float32).to(self.device)
-                                            )
-                    #error_term = error_term * vt_term_zero
-
-
                     advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
                     vt_term = (vt_term - torch.min(vt_term)) / (torch.max(vt_term) - torch.min(vt_term) + 1e-8)
-                    div_term = (div_term - torch.min(div_term)) / (torch.max(div_term) - torch.min(div_term) + 1e-8)
-                    error_term = (error_term - torch.min(error_term)) / (torch.max(error_term) - torch.min(error_term) + 1e-8)
 
-                    advantages = (self.beta_0 * advantages + self.beta_1 * vt_term + self.beta_2 * div_term + self.beta_3 * error_term)
+                    advantages = self.beta_0 * advantages + self.beta_1 * vt_term
 
                 # Normalize advantage
                 if self.normalize_advantage:
@@ -427,7 +404,7 @@ class PPO(OnPolicyAlgorithm):
                 delta_accept = (accept_g0_batch - accept_g1_batch) ** 2
 
 
-                loss = policy_loss + self.ent_coef * entropy_loss + self.vf_coef * value_loss + 10 * delta_accept
+                loss = policy_loss + self.ent_coef * entropy_loss + self.vf_coef * value_loss #+ 10 * delta_accept
 
                 # Calculate approximate form of reverse KL Divergence for early stopping
                 # see issue #417: https://github.com/DLR-RM/stable-baselines3/issues/417
@@ -465,22 +442,21 @@ class PPO(OnPolicyAlgorithm):
         self.logger.record("train/clip_fraction", np.mean(clip_fractions))
         self.logger.record("train/loss", loss.item())
         self.logger.record("train/explained_variance", explained_var)
-        self.logger.record("train/pred_loss", np.mean(pred_losses))
         self.logger.record("train/accept_rate", np.mean(self.rollout_buffer.actions.flatten()))
         self.logger.record("train/pos_rate", np.mean(self.rollout_buffer.labels.flatten()))
-        self.logger.record("train/accept_g0", accept_rate[0])
-        self.logger.record("train/accept_g1", accept_rate[1])
-        self.logger.record("train/error_accepted", error_accepted_all.item())
+        #self.logger.record("train/accept_g0", accept_rate[0])
+        #self.logger.record("train/accept_g1", accept_rate[1])
+        #self.logger.record("train/error_accepted", error_accepted_all.item())
         self.logger.record("train/error_a0_g0", error_rejected[0].item())
         self.logger.record("train/error_a0_g1", error_rejected[1].item())
-        self.logger.record("train/error_a1_g0", error_accepted[0].item())
-        self.logger.record("train/error_a1_g1", error_accepted[1].item())
-        self.logger.record("train/error_hat_a0_g0", error_rejected_estimate[0].item())
-        self.logger.record("train/error_hat_a0_g1", error_rejected_estimate[1].item())
-        self.logger.record("train/b_g0", (1 - accept_rate[0]) * error_rejected[0].item())
-        self.logger.record("train/b_g1", (1 - accept_rate[1]) * error_rejected[1].item())
-        self.logger.record("train/b_hat_g0", (1 - accept_rate[0]) * error_rejected_estimate[0].item())
-        self.logger.record("train/b_hat_g1", (1 - accept_rate[1]) * error_rejected_estimate[1].item())
+        #self.logger.record("train/error_a1_g0", error_accepted[0].item())
+        #self.logger.record("train/error_a1_g1", error_accepted[1].item())
+        #self.logger.record("train/error_hat_a0_g0", error_rejected_estimate[0].item())
+        #self.logger.record("train/error_hat_a0_g1", error_rejected_estimate[1].item())
+        #self.logger.record("train/b_g0", (1 - accept_rate[0]) * error_rejected[0].item())
+        #self.logger.record("train/b_g1", (1 - accept_rate[1]) * error_rejected[1].item())
+        #self.logger.record("train/b_hat_g0", (1 - accept_rate[0]) * error_rejected_estimate[0].item())
+        #self.logger.record("train/b_hat_g1", (1 - accept_rate[1]) * error_rejected_estimate[1].item())
         self.logger.record("train/delta_b_term", self.rollout_buffer.delta_b_terms.mean().item())
         self.logger.record("train/delta", self.rollout_buffer.deltas.mean().item())
         self.logger.record("train/delta_delta", self.rollout_buffer.delta_deltas.mean().item())

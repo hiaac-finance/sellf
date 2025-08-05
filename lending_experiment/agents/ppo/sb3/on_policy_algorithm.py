@@ -172,7 +172,6 @@ class OnPolicyAlgorithm(BaseAlgorithm):
         # Switch to eval mode (this affects batch norm / dropout)
         self.policy.set_training_mode(False)
 
-        start = time.time()
         # first, predict for everyone in the pool
         action_list = []
         pred_list = []
@@ -187,10 +186,6 @@ class OnPolicyAlgorithm(BaseAlgorithm):
             pred_list.append(pred)
         
         env.env_method("set_action_pred", action_list, pred_list)
-
-        end = time.time()
-        print(f"Prediction time for {env.get_attr('num_applicants')[0]} applicants: {end - start:.4f} seconds")
-        print(f"Delta: {env.get_attr('state')[0].delta}")
 
         n_steps = 0
         rollout_buffer.reset()
