@@ -29,107 +29,18 @@ from yaml import full_load
 
 import sys; sys.path.append('..')
 
-from lending_experiment.environments import params, rewards
-from lending_experiment.environments.lending import DelayedImpactEnv, EnemPoolEnv
-from lending_experiment.environments.lending_params import DelayedImpactParams, two_group_credit_clusters
-from lending_experiment.environments.rewards import LendingReward
 from lending_experiment.agents.ppo.ppo_wrapper_env import PPOEnvWrapper, Monitor
 from lending_experiment.agents.ppo.sb3.ppo import PPO
+
+from lending_experiment.environments.resampling import ResamplingEnv, LendingEnv, Params as ResamplingParams
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print('Using device: ', device)
 torch.cuda.empty_cache()
 
-def get_env(env_name: str):
-    if env_name == "yu2022":
-        env_params = DelayedImpactParams(
-            applicant_distribution=two_group_credit_clusters(
-                cluster_probabilities=[
-                    [0.0, 0.1, 0.1, 0.2, 0.3, 0.3, 0.0],
-                    [0.1, 0.1, 0.2, 0.3, 0.3, 0.0, 0.0],
-                ],
-                group_likelihoods=[0.5, 0.5],
-                success_probabilities=[
-                    [0.1, 0.2, 0.45, 0.6, 0.65, 0.7, 0.7], 
-                    [0.1, 0.2, 0.45, 0.6, 0.65, 0.7, 0.7]
-                ]
-            ),
-            bank_starting_cash=10_000,
-            interest_rate=1,
-            cluster_shift_increment=0.01,
-        )
-        env = DelayedImpactEnv(env_params)
-    elif env_name == "yu2022_hard":
-        env_params = DelayedImpactParams(
-            applicant_distribution=two_group_credit_clusters(
-                cluster_probabilities=[
-                    [0.0, 0.1, 0.1, 0.2, 0.3, 0.3, 0.0],
-                    [0.1, 0.1, 0.2, 0.3, 0.3, 0.0, 0.0],
-                ],
-                group_likelihoods=[0.5, 0.5],
-                success_probabilities=[
-                   [0.3, 0.4, 0.65, 0.8, 0.85, 0.9, 0.9],
-                   [0.5, 0.55, 0.7, 0.7, 0.75, 0.75, 0.8], 
-                ]
-            ),
-            bank_starting_cash=10_000,
-            interest_rate=0.25,
-            cluster_shift_increment=0.01,
-        )
-        env = DelayedImpactEnv(env_params)
-    elif env_name == "setting1_hard":
-        env_params = DelayedImpactParams(
-            applicant_distribution=two_group_credit_clusters(
-                cluster_probabilities=[
-                    (0.0, 0.0, 0.05, 0.05, 0.05, 0.05, 0.1, 0.1, 0.15, 0.15, 0.15, 0.15, 0.0, 0.0),
-	                (0.05, 0.05, 0.05, 0.05, 0.1, 0.1, 0.15, 0.15, 0.15, 0.15, 0.0, 0.0, 0.0, 0.0),  
-                ],
-                group_likelihoods=[0.5, 0.5],
-                success_probabilities=[
-                    (0.773, 0.804, 0.833, 0.857, 0.879, 0.898, 0.914, 0.928, 0.939, 0.949, 0.958, 0.965, 0.970, 0.975),
-                    (0.673, 0.704, 0.733, 0.757, 0.779, 0.798, 0.714, 0.728, 0.939, 0.949, 0.958, 0.965, 0.970, 0.975),
-                ]
-            ),
-            bank_starting_cash=10_000,
-            interest_rate=0.1,
-            cluster_shift_increment=0.01,
-        )
-        env = DelayedImpactEnv(env_params)
-
-    elif env_name == "fico":
-        with open("data/fico.pkl", "rb") as f:
-            data = pkl.load(f)
-
-        env_params = DelayedImpactParams(
-            applicant_distribution=two_group_credit_clusters(
-                cluster_probabilities=data["cluster_probabilities"],
-                group_likelihoods=data["group_likelihoods"],
-                success_probabilities=data["success_probabilities"]
-            ),
-            bank_starting_cash=10_000,
-            interest_rate=0.25,
-            cluster_shift_increment=0.01,
-        )
-        env = DelayedImpactEnv(env_params)
-
-    elif env_name == "fico_fast":
-        with open("data/fico.pkl", "rb") as f:
-            data = pkl.load(f)
-
-        env_params = DelayedImpactParams(
-            applicant_distribution=two_group_credit_clusters(
-                cluster_probabilities=data["cluster_probabilities"],
-                group_likelihoods=[0.5, 0.5], #data["group_likelihoods"],
-                success_probabilities=data["success_probabilities"]
-            ),
-            bank_starting_cash=10_000,
-            interest_rate=0.25,
-            cluster_shift_increment=0.1,
-        )
-        env = DelayedImpactEnv(env_params)
-
-    elif env_name == "enem":
-        env = EnemPoolEnv()
+def get_env(env_name: str, utility_method: str, delta_method: str) -> ResamplingEnv:
+    params = ResamplingParams()
+    env = LendingEnv(params, utility_method=utility_method, delta_method=delta_method)
     return env
 
 
@@ -142,10 +53,7 @@ def train(train_timesteps, env, config):
 
     env = PPOEnvWrapper(
         env=env, 
-        reward_fn=LendingReward, 
         ep_timesteps=config.environment.ep_timesteps,
-        mu_type=config.environment.mu_type, 
-        obs_type=config.environment.obs_type,
     )
     env = Monitor(env)
     env = DummyVecEnv([lambda: env])
@@ -157,13 +65,14 @@ def train(train_timesteps, env, config):
         policy_kwargs={
             "use_predictor": config.policy.use_predictor,
             "activation_fn": torch.nn.ReLU,
-            "net_arch": [256, 256, dict(vf=[256, 128], pi=[256, 128])],
+            "net_arch": [32, dict(vf=[32], pi=[32])],
         },
         verbose=0,
         omega=config.environment.omega,
         device=device,
         **config.algorithm
     )
+    env.env_method("set_agent", model)
 
     shutil.rmtree(save_dir, ignore_errors=True)
     Path(save_dir).mkdir(parents=True, exist_ok=True)
@@ -184,7 +93,6 @@ def evaluate(env, agent, num_eps, num_timesteps, name, seeds, eval_path):
     Path(f'{eval_path}/{name}/').mkdir(parents=True, exist_ok=True)
     eval_data = []
 
-    reward_fn = LendingReward()
 
     for ep in range(num_eps):
         random.seed(seeds[ep])
@@ -194,6 +102,23 @@ def evaluate(env, agent, num_eps, num_timesteps, name, seeds, eval_path):
         obs = env.reset()
         done = False
         print(f'Episode {ep}:')
+
+        # Make predictions for everyone
+        action_list = []
+        pred_list = []
+        for idx in range(env.get_attr("num_applicants")[0]):
+            obs = env.env_method("get_applicant_obs", idx)[0]
+            obs_tensor = torch.tensor(obs, dtype=torch.float32).to(device)
+            obs_tensor = obs_tensor.unsqueeze(0)
+            action, _, _ = agent(obs_tensor)
+            action = action.cpu().numpy()
+            pred = agent.predict_label(obs_tensor).item()
+            action_list.append(action)
+            pred_list.append(pred)
+        
+        env.env_method("set_action_pred", action_list, pred_list)
+
+
         for t in tqdm.trange(num_timesteps):
             will_default = env.state.will_default
 
@@ -220,12 +145,6 @@ def evaluate(env, agent, num_eps, num_timesteps, name, seeds, eval_path):
 
             bank_cash = env.state.bank_cash
 
-            r = reward_fn(old_bank_cash=old_bank_cash,
-                          bank_cash=bank_cash,
-                          tpr=np.zeros(2,),#eval_data['tot_tpr'][ep],
-                          zeta0=1,
-                          zeta1=0)
-            
             eval_data.append({
                 "ep" : ep,
                 "t" : t,
@@ -249,32 +168,32 @@ def evaluate(env, agent, num_eps, num_timesteps, name, seeds, eval_path):
     eval_data = pd.DataFrame(eval_data)
     eval_data.to_csv(f'{eval_path}/eval_data.csv', index=False)
 
-    if env.env.observation_space["applicant_features"].shape[0] > 10:
-        return eval_data
+    # if env.env.observation_space["applicant_features"].shape[0] > 10:
+    #     return eval_data
 
-    predictions = []
-    # calculate the output of the predictor net
-    for g in range(env.state.params.num_groups):
-        for x in range(env.env.observation_space['applicant_features'].shape[0]):
-            # transform g to one hot encode
-            g_ = np.zeros(2)
-            g_[g] = 1
-            x_ = np.zeros(env.env.observation_space['applicant_features'].shape[0])
-            x_[x] = 1
-            obs = np.concatenate([x_, g_])
-            obs = np.expand_dims(obs, axis=0)
-            obs = torch.tensor(obs, dtype=torch.float32).to(device)
-            pred = agent.policy.prob_label(obs).cpu().detach().numpy()
-            #action = agent.policy.prob_loan(obs)[0]
-            predictions.append({
-                "g": g,
-                "x": x,
-                "pred" : pred.item(),
-            #    "action" : action.item(),
-            })
+    # predictions = []
+    # # calculate the output of the predictor net
+    # for g in range(env.state.params.num_groups):
+    #     for x in range(env.env.observation_space['applicant_features'].shape[0]):
+    #         # transform g to one hot encode
+    #         g_ = np.zeros(2)
+    #         g_[g] = 1
+    #         x_ = np.zeros(env.env.observation_space['applicant_features'].shape[0])
+    #         x_[x] = 1
+    #         obs = np.concatenate([x_, g_])
+    #         obs = np.expand_dims(obs, axis=0)
+    #         obs = torch.tensor(obs, dtype=torch.float32).to(device)
+    #         pred = agent.policy.prob_label(obs).cpu().detach().numpy()
+    #         #action = agent.policy.prob_loan(obs)[0]
+    #         predictions.append({
+    #             "g": g,
+    #             "x": x,
+    #             "pred" : pred.item(),
+    #         #    "action" : action.item(),
+    #         })
 
-    predictions = pd.DataFrame(predictions)
-    predictions.to_csv(f'{eval_path}/predictions.csv', index=False)
+    # predictions = pd.DataFrame(predictions)
+    # predictions.to_csv(f'{eval_path}/predictions.csv', index=False)
 
     return eval_data
 
@@ -314,7 +233,7 @@ def main():
         f.write(f"Algorithm: {config.general.algorithm}\n")
         f.write(f"Train Timesteps: {config.algorithm.train_timesteps}\n")
         
-    env = get_env(config.general.env_name)
+    env = get_env(config.general.env_name, config.environment.mu_type, config.environment.obs_type)
     train(train_timesteps=config.algorithm.train_timesteps, env=env, config=config)
     #    plot_rets(exp_path=EXP_DIR, save_png=True)
 
@@ -347,16 +266,14 @@ def main():
         "models",
         "final_model.zip"
     )
-    env = get_env(config.general.env_name)
+    env = get_env(config.general.env_name, config.environment.mu_type, config.environment.obs_type)
     name = config.general.algorithm
     agent = PPO.load(model_path, verbose=1)
     env = PPOEnvWrapper(
         env=env, 
-        reward_fn=LendingReward, 
         ep_timesteps=config.environment.ep_timesteps,
-        mu_type=config.environment.mu_type, 
-        obs_type=config.environment.obs_type,
     )
+    env.set_agent(agent)
     evaluate(
         env=env,
         agent=agent,
