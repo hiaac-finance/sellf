@@ -10,11 +10,11 @@ from lending_experiment.environments import core
 @attr.s
 class Params(core.Params):
     num_groups = attr.ib(default=2)
-    cost = attr.ib(default=0.5)
+    gain = attr.ib(default=0.25)
     starting_resource = attr.ib(default=1_000.0)
     max_resource = attr.ib(default=100_000.0)
     num_applicants = attr.ib(default=10_000)
-    num_features = attr.ib(default=7)
+    num_features = attr.ib(default=10)
 
 
 @attr.s(cmp=False)
@@ -132,7 +132,10 @@ class ResamplingEnv(core.FairnessEnv):
         params = state.params
         if action == 0:  # reject
             return
-        state.resource += state.label - params.cost
+        if state.label == 1:
+            state.resource += params.gain
+        else:
+            state.resource -= 1
 
     def update_applicant(self, state, action):
         # Implement logic to update the applicant based on the action taken
