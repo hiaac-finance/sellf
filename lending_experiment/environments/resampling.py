@@ -1,6 +1,7 @@
 import attr
 import copy
 import numpy as np
+import pickle as pkl
 
 from gym import spaces
 
@@ -219,15 +220,15 @@ class LendingEnv(ResamplingEnv):
     """
 
     def load_pool(self, params):
-        groups_probs = [0.5, 0.5]
-        cluster_probs = [
-            [0.0, 0.1, 0.1, 0.2, 0.3, 0.3, 0.0],
-            [0.1, 0.1, 0.2, 0.3, 0.3, 0.0, 0.0],
-        ]
-        success_probs = [
-            [0.1, 0.2, 0.45, 0.6, 0.65, 0.7, 0.7],
-            [0.1, 0.2, 0.45, 0.6, 0.65, 0.7, 0.7],
-        ]
+        with open("data/fico.pkl", "rb") as f:
+            data = pkl.load(f)
+        groups_probs = data["group_likelihoods"]
+        cluster_probs = data["cluster_probabilities"]
+        success_probs = data["success_probabilities"]
+
+        def sample_label(g, x):
+            return np.random.binomial(n=1, p=success_probs[g][x])
+        self.label_fn = sample_label
 
         num_groups = len(groups_probs)
         num_features = len(cluster_probs[0])
@@ -235,8 +236,7 @@ class LendingEnv(ResamplingEnv):
         for i in range(params.num_applicants):
             g = np.random.choice(num_groups, p=groups_probs)
             x = np.random.choice(num_features, p=cluster_probs[g])
-            y = np.random.binomial(n=1, p=success_probs[g][x])
-            y = int(y)
+            y = self.label_fn(g, x)
             # one hot encode group and x
             features = np.zeros(num_features, dtype=np.float32)
             features[x] = 1
@@ -268,13 +268,8 @@ class LendingEnv(ResamplingEnv):
         self.pool[idx]["features"][new_score] = 1
         state.applicant_features = self.pool[idx]["features"]
 
-        success_probs = [
-            [0.1, 0.2, 0.45, 0.6, 0.65, 0.7, 0.7],
-            [0.1, 0.2, 0.45, 0.6, 0.65, 0.7, 0.7],
-        ]
         group = np.argmax(state.group)
-        y = np.random.binomial(n=1, p=success_probs[group][new_score])
-        y = int(y)
+        y = self.label_fn(group, new_score)
         self.pool[idx]["label"] = y
         state.label = y
 
