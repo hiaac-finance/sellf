@@ -99,30 +99,25 @@ def evaluate(env, agent, num_eps, num_timesteps, name, seeds, eval_path):
         np.random.seed(seeds[ep])
         torch.manual_seed(seeds[ep])
 
-        obs = env.reset()
-        done = False
-        print(f'Episode {ep}:')
-
         # Make predictions for everyone
         action_list = []
         pred_list = []
         for idx in range(env.num_applicants):
-            obs = env.env_method("get_applicant_obs", idx)[0]
-            obs_tensor = torch.tensor(obs, dtype=torch.float32).to(device)
-            obs_tensor = obs_tensor.unsqueeze(0)
-            action, _, _ = agent(obs_tensor)
-            action = action.cpu().numpy()
-            pred = agent.predict_label(obs_tensor).item()
+            obs = env.get_applicant_obs(idx)
+            obs = np.array(obs).reshape(1, -1)
+            action = agent.predict(obs)[0]
+            obs = torch.tensor(obs, dtype=torch.float32).to(device)
+            pred = agent.policy.predict_label(obs).item()
             action_list.append(action)
             pred_list.append(pred)
         
-        env.env_method("set_action_pred", action_list, pred_list)
+        env.set_action_pred(action_list, pred_list)
 
+        obs = env.reset()
+        done = False
+        print(f'Episode {ep}:')
 
         for t in tqdm.trange(num_timesteps):
-            will_default = env.state.will_default
-
-
             action = None
             if isinstance(agent, PPO):
                 action = agent.predict(obs)[0]
@@ -135,16 +130,9 @@ def evaluate(env, agent, num_eps, num_timesteps, name, seeds, eval_path):
             # Logging
             group_id = np.argmax(env.state.group)
             # Add to loans if the agent wants to loan
-            label = 1 - env.state.will_default
-
-            env.pred = pred
-
-            old_bank_cash = env.state.bank_cash
-
+            label = env.state.label
             obs, _, done, _ = env.step(action)
-
-            bank_cash = env.state.bank_cash
-
+            resource = env.state.resource
             eval_data.append({
                 "ep" : ep,
                 "t" : t,
@@ -153,47 +141,17 @@ def evaluate(env, agent, num_eps, num_timesteps, name, seeds, eval_path):
                 "label" : label,
                 "pred" : pred,
                 "correct" : int(label == pred),
-                "bank_cash" : bank_cash,
-                "mu0" : env.mu[0],
-                "mu1" : env.mu[1],
-                "delta" : env.delta,
-                "delta_real" : env.delta_real,
+                "resource" : resource,
+                "delta" : env.state.delta,
+                "delta_real" : env.state.delta_real,
             })
         
             if done:
                 break
 
-   
     Path(f'{eval_path}').mkdir(parents=True, exist_ok=True)
     eval_data = pd.DataFrame(eval_data)
     eval_data.to_csv(f'{eval_path}/eval_data.csv', index=False)
-
-    # if env.env.observation_space["applicant_features"].shape[0] > 10:
-    #     return eval_data
-
-    # predictions = []
-    # # calculate the output of the predictor net
-    # for g in range(env.state.params.num_groups):
-    #     for x in range(env.env.observation_space['applicant_features'].shape[0]):
-    #         # transform g to one hot encode
-    #         g_ = np.zeros(2)
-    #         g_[g] = 1
-    #         x_ = np.zeros(env.env.observation_space['applicant_features'].shape[0])
-    #         x_[x] = 1
-    #         obs = np.concatenate([x_, g_])
-    #         obs = np.expand_dims(obs, axis=0)
-    #         obs = torch.tensor(obs, dtype=torch.float32).to(device)
-    #         pred = agent.policy.prob_label(obs).cpu().detach().numpy()
-    #         #action = agent.policy.prob_loan(obs)[0]
-    #         predictions.append({
-    #             "g": g,
-    #             "x": x,
-    #             "pred" : pred.item(),
-    #         #    "action" : action.item(),
-    #         })
-
-    # predictions = pd.DataFrame(predictions)
-    # predictions.to_csv(f'{eval_path}/predictions.csv', index=False)
 
     return eval_data
 
