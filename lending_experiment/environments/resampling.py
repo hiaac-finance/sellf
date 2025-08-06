@@ -257,6 +257,11 @@ class ResamplingEnv(core.FairnessEnv):
             self.pool[idx]["pred"] = pred
             self.update_utility(idx, label, pred, group_idx, action, init = True)
 
+        self.utility_matrix = copy.deepcopy(self.init_utility_matrix)
+        self.active_matrix = copy.deepcopy(self.init_active_matrix)
+        self.utility_real_matrix = copy.deepcopy(self.init_utility_real_matrix)
+        self.active_real_matrix = copy.deepcopy(self.init_active_real_matrix)
+
         self.compute_disparity()
 
 
