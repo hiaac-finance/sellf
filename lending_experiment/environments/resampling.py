@@ -191,13 +191,13 @@ class ResamplingEnv(core.FairnessEnv):
         elif self.delta_method == "accepted":
             label = label
             if self.utility_method == "accuracy":
-                utility_value = label * action
+                utility_value = 1 if label == action else 0
                 active = 1 if action else 0
             elif self.utility_method == "qualification":
-                utility_value = label * action
+                utility_value = label
                 active = 1 if action else 0
             elif self.utility_method == "tpr":
-                utility_value = label * action
+                utility_value = action
                 active = 1 if action * label == 1 else 0
 
         if init:
@@ -208,6 +208,10 @@ class ResamplingEnv(core.FairnessEnv):
             self.active_matrix[idx, group_idx] = active
 
     def compute_disparity(self):
+        # Multiplity utility by active matrix
+        self.utility_matrix *= self.active_matrix
+        self.utility_real_matrix *= self.active_real_matrix
+        
         # First, calculate real utility
         cur_util = np.sum(self.utility_real_matrix, axis=0)
         group_counts = np.sum(self.active_real_matrix, axis=0)
@@ -243,6 +247,10 @@ class ResamplingEnv(core.FairnessEnv):
         return
 
     def set_action_pred(self, list_action, list_pred):
+        self.init_active_matrix *= 0
+        self.init_utility_matrix *= 0
+        self.init_active_real_matrix *= 0
+        self.init_utility_real_matrix *= 0
         for idx, (action, pred) in enumerate(zip(list_action, list_pred)):
             label = self.pool[idx]["label"]
             group_idx = self.pool[idx]["group"].argmax()
