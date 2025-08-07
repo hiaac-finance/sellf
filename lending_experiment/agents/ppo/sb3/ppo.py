@@ -437,6 +437,20 @@ class PPO(OnPolicyAlgorithm):
         self._n_updates += self.n_epochs
         explained_var = explained_variance(self.rollout_buffer.values.flatten(), self.rollout_buffer.returns.flatten())
 
+        g0_idx = (self.rollout_buffer.groups[:, 0] == 1).nonzero()
+        g1_idx = (self.rollout_buffer.groups[:, 1] == 1).nonzero()
+
+        accept_rate = [
+            self.rollout_buffer.actions[g0_idx, 0].mean().item(),
+            self.rollout_buffer.actions[g1_idx, 0].mean().item()
+        ]
+
+        g0_y1_idx = (self.rollout_buffer.groups[:, 0] == 1) & (self.rollout_buffer.labels[:, 0] == 1)
+        g1_y1_idx = (self.rollout_buffer.groups[:, 1] == 1) & (self.rollout_buffer.labels[:, 0] == 1)
+        tpr_rate = [
+            self.rollout_buffer.actions[g0_y1_idx, 0].mean().item(),
+            self.rollout_buffer.actions[g1_y1_idx, 0].mean().item()
+        ]
         # Logs
         self.logger.record("train/entropy_loss", np.mean(entropy_losses))
         self.logger.record("train/policy_gradient_loss", np.mean(pg_losses))
@@ -447,8 +461,10 @@ class PPO(OnPolicyAlgorithm):
         self.logger.record("train/explained_variance", explained_var)
         self.logger.record("train/accept_rate", np.mean(self.rollout_buffer.actions.flatten()))
         self.logger.record("train/pos_rate", np.mean(self.rollout_buffer.labels.flatten()))
-        #self.logger.record("train/accept_g0", accept_rate[0])
-        #self.logger.record("train/accept_g1", accept_rate[1])
+        self.logger.record("train/accept_g0", accept_rate[0])
+        self.logger.record("train/accept_g1", accept_rate[1])
+        self.logger.record("train/tpr_g0", tpr_rate[0])
+        self.logger.record("train/tpr_g1", tpr_rate[1])
         #self.logger.record("train/error_accepted", error_accepted_all.item())
         self.logger.record("train/error_a0_g0", error_rejected[0].item())
         self.logger.record("train/error_a0_g1", error_rejected[1].item())

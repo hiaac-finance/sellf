@@ -7,6 +7,7 @@ from gym import spaces
 
 from lending_experiment.environments import core
 
+
 @attr.s
 class Params(core.Params):
     num_groups = attr.ib(default=2)
@@ -53,7 +54,7 @@ class ResamplingEnv(core.FairnessEnv):
         self.utility_method = utility_method
         self.delta_method = delta_method
         self.action_space = spaces.Discrete(2)
-        self.predict_fn = lambda x : 0
+        self.predict_fn = lambda x: 0
 
         resource_space = spaces.Box(
             low=0.0,
@@ -96,6 +97,7 @@ class ResamplingEnv(core.FairnessEnv):
         self.active_real_matrix = np.zeros(
             (params.num_applicants, params.num_groups), dtype=np.float32
         )
+        self.init_pool = []
         self.pool = []
         self.load_pool(params)
 
@@ -108,16 +110,17 @@ class ResamplingEnv(core.FairnessEnv):
             rng=rng or np.random.RandomState(),
             resource=self.initial_params.starting_resource,
         )
-        self.utility_matrix = copy.deepcopy(self.init_utility_matrix)
-        self.active_matrix = copy.deepcopy(self.init_active_matrix)
-        self.utility_real_matrix = copy.deepcopy(self.init_utility_real_matrix)
-        self.active_real_matrix = copy.deepcopy(self.init_active_real_matrix)
-        self.compute_disparity()
         self.sample_applicant()
 
     def reset(self):
         """Resets the environment."""
+        self.pool = copy.deepcopy(self.init_pool)
+        self.utility_matrix = copy.deepcopy(self.init_utility_matrix)
+        self.active_matrix = copy.deepcopy(self.init_active_matrix)
+        self.utility_real_matrix = copy.deepcopy(self.init_utility_real_matrix)
+        self.active_real_matrix = copy.deepcopy(self.init_active_real_matrix)
         self._state_init(self.state.rng)
+        self.compute_disparity()
         return super(ResamplingEnv, self).reset()
 
     def _is_done(self):
@@ -156,7 +159,7 @@ class ResamplingEnv(core.FairnessEnv):
         # Implement logic to update the applicant based on the action taken
         pass
 
-    def update_utility(self, idx, label, pred, group_idx, action, init = False):
+    def update_utility(self, idx, label, pred, group_idx, action, init=False):
         """Update the difference in utility for the current applicant. Also updates the utility in the pool."""
         # First, calculate real utility
         active = 1
@@ -167,7 +170,7 @@ class ResamplingEnv(core.FairnessEnv):
         elif self.utility_method == "tpr":
             utility_value = action
             active = 1 if label == 1 else 0
-        
+
         if init:
             self.init_utility_real_matrix[idx, group_idx] = utility_value
             self.init_active_real_matrix[idx, group_idx] = active
@@ -176,7 +179,7 @@ class ResamplingEnv(core.FairnessEnv):
             self.active_real_matrix[idx, group_idx] = active
 
         if self.delta_method == "full":
-            pass # Full delta is already calculated in the utility_real_matrix
+            pass  # Full delta is already calculated in the utility_real_matrix
         elif self.delta_method == "imputation":
             label = label if action == 1 else pred
             if self.utility_method == "accuracy":
@@ -211,7 +214,7 @@ class ResamplingEnv(core.FairnessEnv):
         # Multiplity utility by active matrix
         self.utility_matrix *= self.active_matrix
         self.utility_real_matrix *= self.active_real_matrix
-        
+
         # First, calculate real utility
         cur_util = np.sum(self.utility_real_matrix, axis=0)
         group_counts = np.sum(self.active_real_matrix, axis=0)
@@ -255,7 +258,7 @@ class ResamplingEnv(core.FairnessEnv):
             label = self.pool[idx]["label"]
             group_idx = self.pool[idx]["group"].argmax()
             self.pool[idx]["pred"] = pred
-            self.update_utility(idx, label, pred, group_idx, action, init = True)
+            self.update_utility(idx, label, pred, group_idx, action, init=True)
 
         self.utility_matrix = copy.deepcopy(self.init_utility_matrix)
         self.active_matrix = copy.deepcopy(self.init_active_matrix)
@@ -279,6 +282,7 @@ class LendingEnv(ResamplingEnv):
 
         def sample_label(g, x):
             return np.random.binomial(n=1, p=success_probs[g][x])
+
         self.label_fn = sample_label
 
         num_groups = len(groups_probs)
@@ -294,7 +298,7 @@ class LendingEnv(ResamplingEnv):
             group = np.zeros(num_groups, dtype=np.float32)
             group[g] = 1
 
-            self.pool.append(
+            self.init_pool.append(
                 {
                     "features": features,
                     "group": group,
@@ -302,6 +306,8 @@ class LendingEnv(ResamplingEnv):
                     "pred": None,
                 }
             )
+        
+        self.pool = copy.deepcopy(self.init_pool)
 
     def update_applicant(self, state, action):
         if action == 0:

@@ -25,6 +25,7 @@ class RolloutBufferSamples(NamedTuple):
     observations: th.Tensor
     actions: th.Tensor
     labels: th.Tensor
+    preds: th.Tensor
     groups: th.Tensor
     old_values: th.Tensor
     old_log_prob: th.Tensor

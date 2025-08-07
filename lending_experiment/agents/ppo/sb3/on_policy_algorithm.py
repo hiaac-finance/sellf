@@ -182,6 +182,7 @@ class OnPolicyAlgorithm(BaseAlgorithm):
             action, _, _ = self.policy(obs_tensor)
             action = action.cpu().numpy()
             pred = self.policy.predict_label(obs_tensor).item()
+            pred = env.get_attr("pool")[0][idx]['label']
             action_list.append(action)
             pred_list.append(pred)
         
@@ -205,11 +206,11 @@ class OnPolicyAlgorithm(BaseAlgorithm):
                 obs_tensor = obs_as_tensor(self._last_obs, self.device)
                 actions, values, log_probs = self.policy(obs_tensor)
                 #prob_loan = self.policy.prob_loan(obs_tensor)
-                #label_pred = self.policy.predict_label(obs_tensor)
+                label_pred = self.policy.predict_label(obs_tensor)
                 #label_prob = self.policy.prob_label(obs_tensor)
             actions = actions.cpu().numpy()
             #prob_loan = prob_loan.cpu().numpy()
-            #label_pred = label_pred.cpu().numpy()
+            label_pred = label_pred.cpu().numpy()
             #label_prob = label_prob.cpu().numpy()
 
             # workaround to pass pred to the env
@@ -263,7 +264,7 @@ class OnPolicyAlgorithm(BaseAlgorithm):
             #delta_real = torch.tensor(np.array(env.get_attr('delta_real')))
             delta_b_term = torch.tensor(np.array([0])).float()
             delta_real = torch.tensor(np.array([state.delta_real])).float()
-            rollout_buffer.add(self._last_obs, actions, label, group, rewards, self._last_episode_starts, values, log_probs, delta, delta_delta, delta_b_term, delta_real)
+            rollout_buffer.add(self._last_obs, actions, label, label_pred, group, rewards, self._last_episode_starts, values, log_probs, delta, delta_delta, delta_b_term, delta_real)
             self._last_obs = new_obs
             self._last_episode_starts = dones
 

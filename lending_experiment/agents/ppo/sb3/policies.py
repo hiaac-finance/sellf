@@ -77,7 +77,7 @@ class PredActorCriticPolicy(ActorCriticPolicy):
         net_arch: Optional[List[Union[int, Dict[str, List[int]]]]] = None,
         activation_fn: Type[nn.Module] = nn.Tanh,
         use_predictor: bool = False,
-        predictor_type : str = "linear",
+        predictor_type : str = "mlp",
         ortho_init: bool = True,
         use_sde: bool = False,
         log_std_init: float = 0.0,
@@ -141,7 +141,7 @@ class PredActorCriticPolicy(ActorCriticPolicy):
         if self.use_predictor:
             if self.predictor_type == "mlp":
                 self.predictor_net = nn.Sequential(
-                    nn.Linear(self.features_dim - 2, 64),
+                    nn.Linear(self.features_dim, 64),
                     nn.BatchNorm1d(64),
                     nn.ReLU(),
                     nn.Dropout(0.5),
