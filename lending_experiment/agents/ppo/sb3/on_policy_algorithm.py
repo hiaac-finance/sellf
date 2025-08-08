@@ -227,6 +227,8 @@ class OnPolicyAlgorithm(BaseAlgorithm):
             state = env.get_attr("state")[0]
             label = np.array([state.label]).astype(np.float32)
             group = np.array([state.group]).astype(np.float32)
+
+            imputation = label if actions[0] == 1 else label_pred
             
             new_obs, rewards, dones, infos = env.step(clipped_actions)
 
@@ -264,7 +266,7 @@ class OnPolicyAlgorithm(BaseAlgorithm):
             #delta_real = torch.tensor(np.array(env.get_attr('delta_real')))
             delta_b_term = torch.tensor(np.array([0])).float()
             delta_real = torch.tensor(np.array([state.delta_real])).float()
-            rollout_buffer.add(self._last_obs, actions, label, label_pred, group, rewards, self._last_episode_starts, values, log_probs, delta, delta_delta, delta_b_term, delta_real)
+            rollout_buffer.add(self._last_obs, actions, label, label_pred, imputation, group, rewards, self._last_episode_starts, values, log_probs, delta, delta_delta, delta_b_term, delta_real)
             self._last_obs = new_obs
             self._last_episode_starts = dones
 

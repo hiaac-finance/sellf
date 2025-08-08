@@ -155,6 +155,8 @@ class ResamplingEnv(core.FairnessEnv):
         else:
             state.resource -= 1
 
+        state.resource = max(0, state.resource)
+
     def update_applicant(self, state, action):
         # Implement logic to update the applicant based on the action taken
         pass

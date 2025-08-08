@@ -348,6 +348,7 @@ class RolloutBuffer(BaseBuffer):
         self.observations = np.zeros((self.buffer_size, self.n_envs) + self.obs_shape, dtype=np.float32)
         self.actions = np.zeros((self.buffer_size, self.n_envs, self.action_dim), dtype=np.float32)
         self.labels = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
+        self.imputations = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
         self.preds = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
         self.groups = np.zeros((self.buffer_size, self.n_envs, 2), dtype=np.float32)
         self.rewards = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
@@ -402,6 +403,7 @@ class RolloutBuffer(BaseBuffer):
         action: np.ndarray,
         label: np.ndarray,
         pred: np.ndarray,
+        imputation: np.ndarray,
         group: np.ndarray,
         reward: np.ndarray,
         episode_start: np.ndarray,
@@ -435,6 +437,7 @@ class RolloutBuffer(BaseBuffer):
         self.actions[self.pos] = np.array(action).copy()
         self.labels[self.pos] = np.array(label).copy()
         self.preds[self.pos] = np.array(pred).copy()
+        self.imputations[self.pos] = np.array(imputation).copy()
         self.groups[self.pos] = np.array(group).copy()
         self.rewards[self.pos] = np.array(reward).copy()
         self.episode_starts[self.pos] = np.array(episode_start).copy()
@@ -459,6 +462,7 @@ class RolloutBuffer(BaseBuffer):
                 "actions",
                 "labels",
                 "preds",
+                "imputations",
                 "groups",
                 "values",
                 "log_probs",
@@ -489,6 +493,7 @@ class RolloutBuffer(BaseBuffer):
             self.actions[batch_inds],
             self.labels[batch_inds],
             self.preds[batch_inds],
+            self.imputations[batch_inds],
             self.groups[batch_inds],
             self.values[batch_inds].flatten(),
             self.log_probs[batch_inds].flatten(),
