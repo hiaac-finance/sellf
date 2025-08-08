@@ -335,3 +335,44 @@ class LendingEnv(ResamplingEnv):
         pred = self.predict_fn(self.pool[idx])
         self.pool[idx]["pred"] = pred
         state.pred = pred
+
+class EnemEnv(ResamplingEnv):
+    """
+    Environment for school admission experiments.
+    """
+
+    def load_pool(self, params):
+        with open("data/enem_pool.pkl", "rb") as f:
+            data = pkl.load(f)
+
+        with open("data/enem_model.pkl", "rb") as f:
+            model = pkl.load(f)
+        
+        self.predict_fn = ...
+        self.init_pool = ...
+        self.pool = copy.deepcopy(self.init_pool)
+
+    def updated_applicant(self, state, action):
+        if action == 1:
+            return
+
+        idx = state.idx
+        features = state.applicant_features
+        age = ...
+        new_age = min(age + 1, params.max_age)
+
+        new_features = features.copy()
+        new_features[age] = 0
+        new_features[new_age] = 1
+
+        self.pool[idx]["features"] = new_features
+        state.applicant_features = new_features
+
+        group = np.argmax(state.group)
+        label = self.label_fn(group, new_age)
+        self.pool[idx]["label"] = label
+        state.label = label
+
+        pred = self.predict_fn(self.pool[idx])
+        self.pool[idx]["pred"] = pred
+        state.pred = pred
