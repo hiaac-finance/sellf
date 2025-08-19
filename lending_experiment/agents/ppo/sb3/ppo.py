@@ -15,18 +15,29 @@ from stable_baselines3.common.utils import explained_variance, get_schedule_fn
 
 from lending_experiment.agents.ppo.sb3.on_policy_algorithm import OnPolicyAlgorithm
 
-from geomloss import SamplesLoss
 
-def estimate_domain_shift(obs_accepted, obs_rejected):
-    """Estimate the domain shift between the accepted and rejected populations."""
-    wloss = SamplesLoss(loss="sinkhorn", p=1, blur=0.01)
+def bound_error(
+    labels: th.Tensor,
+    prob_label: th.Tensor,
+    prob_accept: th.Tensor,
+    accept: th.Tensor,
+    bound_type: str = "diff",
+):
+    assert bound_type in ["diff", "var", "kl"]
 
-    # calculate the domain shift between the accepted and rejected populations
-    dist_distance = wloss(
-        obs_accepted,
-        obs_rejected,
-    )
-    return dist_distance
+    accept_error = (prob_label - labels)[accept == 1]
+    accept_error = th.mean(accept_error) if accept_error.numel() > 0 else 0
+
+    a = th.mean(prob_accept)
+    r = 1 - a
+    if bound_type == "diff":
+        dist = th.abs(prob_accept - a).mean() / (a * r)
+    elif bound_type == "var":
+        dist = th.std(prob_accept) / (a * r)
+    elif bound_type == "kl":
+        raise Exception("Not implemented yet")
+
+    return accept_error + dist
 
 
 class PPO(OnPolicyAlgorithm):
@@ -80,38 +91,39 @@ class PPO(OnPolicyAlgorithm):
     """
 
     def __init__(
-            self,
-            policy: Union[str, Type[ActorCriticPolicy]],
-            env: Union[GymEnv, str],
-            learning_rate: Union[float, Schedule] = 3e-4,
-            ad_reg: str = "pocar",
-            beta_0: float = 1.0,
-            beta_1: float = 0.25,
-            beta_2: float = 0.,
-            beta_3: float = 0.,
-            omega: float = 0.1,
-            n_steps: int = 2000,
-            batch_size: int = 64,
-            n_epochs: int = 10,
-            gamma: float = 0.99,
-            gae_lambda: float = 0.95,
-            clip_range: Union[float, Schedule] = 0.2,
-            clip_range_vf: Union[None, float, Schedule] = None,
-            normalize_advantage: bool = True,
-            ent_coef: float = 0.,
-            vf_coef: float = 0.5,
-            max_grad_norm: float = 0.5,
-            use_sde: bool = False,
-            sde_sample_freq: int = -1,
-            target_kl: Optional[float] = None,
-            tensorboard_log: Optional[str] = None,
-            create_eval_env: bool = False,
-            policy_kwargs: Optional[Dict[str, Any]] = None,
-            verbose: int = 0,
-            seed: Optional[int] = None,
-            device: Union[th.device, str] = "auto",
-            _init_setup_model: bool = True,
-            **kwargs: Any,
+        self,
+        policy: Union[str, Type[ActorCriticPolicy]],
+        env: Union[GymEnv, str],
+        learning_rate: Union[float, Schedule] = 3e-4,
+        ad_reg: str = "pocar",
+        beta_0: float = 1.0,
+        beta_1: float = 0.25,
+        beta_2: float = 0.0,
+        beta_3: float = 0.0,
+        bound_type: str = "diff",
+        omega: float = 0.1,
+        n_steps: int = 2000,
+        batch_size: int = 64,
+        n_epochs: int = 10,
+        gamma: float = 0.99,
+        gae_lambda: float = 0.95,
+        clip_range: Union[float, Schedule] = 0.2,
+        clip_range_vf: Union[None, float, Schedule] = None,
+        normalize_advantage: bool = True,
+        ent_coef: float = 0.2,
+        vf_coef: float = 0.5,
+        max_grad_norm: float = 0.5,
+        use_sde: bool = False,
+        sde_sample_freq: int = -1,
+        target_kl: Optional[float] = None,
+        tensorboard_log: Optional[str] = None,
+        create_eval_env: bool = False,
+        policy_kwargs: Optional[Dict[str, Any]] = None,
+        verbose: int = 0,
+        seed: Optional[int] = None,
+        device: Union[th.device, str] = "auto",
+        _init_setup_model: bool = True,
+        **kwargs: Any,
     ):
 
         super(PPO, self).__init__(
@@ -145,15 +157,16 @@ class PPO(OnPolicyAlgorithm):
         # because of the advantage normalization
         if normalize_advantage:
             assert (
-                    batch_size > 1
+                batch_size > 1
             ), "`batch_size` must be greater than 1. See https://github.com/DLR-RM/stable-baselines3/issues/440"
 
         if self.env is not None:
+            self.utility_method = env.get_attr("utility_method")[0]
             # Check that `n_steps * n_envs > 1` to avoid NaN
             # when doing advantage normalization
             buffer_size = self.env.num_envs * self.n_steps
             assert (
-                    buffer_size > 1
+                buffer_size > 1
             ), f"`n_steps * n_envs` must be greater than 1. Currently n_steps={self.n_steps} and n_envs={self.env.num_envs}"
             # Check that the rollout buffer size is a multiple of the mini-batch size
             untruncated_batches = buffer_size // batch_size
@@ -178,6 +191,8 @@ class PPO(OnPolicyAlgorithm):
         self.clip_range_vf = clip_range_vf
         self.normalize_advantage = normalize_advantage
         self.target_kl = target_kl
+        self.predictor_steps = 300  # initial value
+        self.bound_type = bound_type
 
         if _init_setup_model:
             self._setup_model()
@@ -189,7 +204,10 @@ class PPO(OnPolicyAlgorithm):
         self.clip_range = get_schedule_fn(self.clip_range)
         if self.clip_range_vf is not None:
             if isinstance(self.clip_range_vf, (float, int)):
-                assert self.clip_range_vf > 0, "`clip_range_vf` must be positive, " "pass `None` to deactivate vf clipping"
+                assert self.clip_range_vf > 0, (
+                    "`clip_range_vf` must be positive, "
+                    "pass `None` to deactivate vf clipping"
+                )
 
             self.clip_range_vf = get_schedule_fn(self.clip_range_vf)
 
@@ -208,69 +226,73 @@ class PPO(OnPolicyAlgorithm):
             obs = th.Tensor(obs).to(self.device)
             probs = self.policy.prob_loan(obs).cpu().numpy()
             obs = obs.cpu().numpy()
-        
-        self.memory.add(
-            obs=obs,
-            label=labels,
-            group=groups,
-            prob=probs
-        )
+
+        self.memory.add(obs=obs, label=labels, group=groups, prob=probs)
 
         losses_hist = []
-        n_steps = 10
-        for i, rollout_data in enumerate(self.memory.get(self.batch_size)):
-            preds = self.policy.prob_label(rollout_data.observations)
-            with th.no_grad():
-                prob_loan = self.policy.prob_loan(rollout_data.observations)
-                prob_loan = th.clamp(prob_loan, min=0.05, max=0.95)
+        steps = 0
+        for epoch in range(100):
+            for i, rollout_data in enumerate(self.memory.get(self.batch_size)):
+                preds = self.policy.prob_label(rollout_data.observations)
+                with th.no_grad():
+                    prob_loan = self.policy.prob_loan(rollout_data.observations)
+                    prob_loan = th.clamp(prob_loan, min=0.05, max=0.95)
 
-            pred_loss = pred_criterion(preds, rollout_data.labels)
-            pred_loss = pred_loss * (1 / prob_loan)
-            pred_loss = pred_loss.sum() / (1 / prob_loan).sum()
-            losses_hist.append(pred_loss.item())
+                pred_loss = pred_criterion(preds, rollout_data.labels)
+                pred_loss = pred_loss * (1 / prob_loan)
+                pred_loss = pred_loss.sum() / (1 / prob_loan).sum()
+                losses_hist.append(pred_loss.item())
 
-            self.policy.pred_optimizer.zero_grad()
-            pred_loss.backward()
-            # Clip grad norm
-            th.nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
-            self.policy.pred_optimizer.step()
+                self.policy.pred_optimizer.zero_grad()
+                pred_loss.backward()
+                # Clip grad norm
+                th.nn.utils.clip_grad_norm_(
+                    self.policy.parameters(), self.max_grad_norm
+                )
+                self.policy.pred_optimizer.step()
+
+                if steps >= self.predictor_steps:
+                    break
+                steps += 1
+
+            if steps >= self.predictor_steps:
+                break
+
             self.policy.scheduler.step()
 
-            if i >= n_steps:
-                break
-        
         mean_loss = np.mean(losses_hist)
         self.logger.record("train/pred_loss", mean_loss)
 
+        self.predictor_steps = 5
+
     def calc_predictor_error(self):
         """Estimate the predictor error on the rejected population using domain shift."""
-        predictions = []
+        probs_label = []
+        probs_accept = []
         with th.no_grad():
             for rollout_data in self.rollout_buffer.get(self.batch_size):
-                preds = self.policy.prob_label(rollout_data.observations)
-                predictions.append(preds)
-                
-        predictions = th.cat(predictions).flatten()
+                preds_label = self.policy.prob_label(rollout_data.observations)
+                probs_label.append(preds_label)
+                preds_accept = self.policy.prob_loan(rollout_data.observations)
+                probs_accept.append(preds_accept)
+        
         labels = torch.Tensor(self.rollout_buffer.labels[:, 0]).to(self.device)
-
-        # First, calculate the error on the accepted population
-        print(self.rollout_buffer.actions.shape)
-        accepted_idx = (self.rollout_buffer.actions[:, 0] == 1)
-        error_accepted = (predictions[accepted_idx] - labels[accepted_idx]).abs().mean()
-        obs_accepted = torch.Tensor(self.rollout_buffer.observations[accepted_idx, :]).to(self.device)
+        probs_label = th.cat(probs_label).flatten()
+        accept = th.Tensor(self.rollout_buffer.actions[:, 0]).to(self.device)
+        probs_accept = th.cat(probs_accept).flatten()
 
         error_rejected = []
         # Now, calculate the error on the rejected population using domain shift
         for group_idx in [0, 1]:
-            rejected_idx = (self.rollout_buffer.groups[:, group_idx] == 1) & (self.rollout_buffer.actions[:, 0] == 0)
-            error = (predictions[rejected_idx] - labels[rejected_idx]).abs().mean()
+            g_idx = (self.rollout_buffer.groups[:, group_idx] == 1)
 
-            obs_rejected = torch.Tensor(self.rollout_buffer.observations[rejected_idx, :]).to(self.device)
-            dist_distance = estimate_domain_shift(obs_accepted, obs_rejected)
-            error_rejected_estimate = error_accepted + dist_distance
-            error_rejected.append(error_rejected_estimate)
+            labels_g = labels[g_idx]
+            probs_label_g = probs_label[g_idx]
+            probs_accept_g = probs_accept[g_idx]
+            accept_g = accept[g_idx]
 
-            print(f"Estimated error rejected g{group_idx}: {error_rejected_estimate.item():.4f} (real: {error.item():.4f}) - domain shift: {dist_distance.item():.4f}. Accepted error: {error_accepted.item():.4f}")
+            estimated_error = bound_error(labels_g, probs_label_g, probs_accept_g, accept_g)
+            error_rejected.append(estimated_error)
 
         return error_rejected
 
@@ -291,6 +313,8 @@ class PPO(OnPolicyAlgorithm):
         entropy_losses = []
         pg_losses, value_losses = [], []
         clip_fractions = []
+        accept_g0_batch_list = []
+        accept_g1_batch_list = []
 
         continue_training = True
 
@@ -298,9 +322,15 @@ class PPO(OnPolicyAlgorithm):
             self.train_predictor()
         if self.beta_3 > 0:
             error_rejected = self.calc_predictor_error()
+            # mean_imputation_g0 = self.rollout_buffer.imputations[g0_idx].mean().item()
+            # mean_imputation_g1 = self.rollout_buffer.imputations[g1_idx].mean().item()
         else:
-            error_rejected = [th.Tensor([0.]).to(self.device), th.Tensor([0.]).to(self.device)]
-
+            error_rejected = [
+                th.Tensor([0.0]).to(self.device),
+                th.Tensor([0.0]).to(self.device),
+            ]
+            # mean_imputation_g0 = 0.0
+            # mean_imputation_g1 = 0.0
 
         # train for n_epochs epochs
         for epoch in range(self.n_epochs):
@@ -316,7 +346,9 @@ class PPO(OnPolicyAlgorithm):
                 if self.use_sde:
                     self.policy.reset_noise(self.batch_size)
 
-                values, log_prob, entropy = self.policy.evaluate_actions(rollout_data.observations, actions)
+                values, log_prob, entropy = self.policy.evaluate_actions(
+                    rollout_data.observations, actions
+                )
                 values = values.flatten()
                 # Advantages shape: (batch_size,)
                 advantages = rollout_data.advantages
@@ -326,46 +358,69 @@ class PPO(OnPolicyAlgorithm):
                     # Compute value-thresholding (vt) term as part of Eq. 3 from the paper
                     vt_term = torch.min(
                         torch.zeros(rollout_data.deltas.shape[0]).to(self.device),
-                        -rollout_data.deltas + torch.tensor(self.omega, dtype=torch.float32)
+                        -rollout_data.deltas
+                        + torch.tensor(self.omega, dtype=torch.float32),
                     )
 
                     # Compute decrease-in-violation (div) term as part of Eq. 3 from the paper
-                    div_cond = torch.where(rollout_data.deltas > torch.tensor(self.omega, dtype=torch.float32).to(self.device),
-                                           torch.tensor(1, dtype=torch.float32).to(self.device),
-                                           torch.tensor(0, dtype=torch.float32).to(self.device))
-                    div_term = torch.min(torch.zeros(rollout_data.delta_deltas.shape[0]).to(self.device),
-                                         -div_cond * rollout_data.delta_deltas)
+                    div_cond = torch.where(
+                        rollout_data.deltas
+                        > torch.tensor(self.omega, dtype=torch.float32).to(self.device),
+                        torch.tensor(1, dtype=torch.float32).to(self.device),
+                        torch.tensor(0, dtype=torch.float32).to(self.device),
+                    )
+                    div_term = torch.min(
+                        torch.zeros(rollout_data.delta_deltas.shape[0]).to(self.device),
+                        -div_cond * rollout_data.delta_deltas,
+                    )
 
                     # Bring the 3 terms to scale for numerical stability
-                    advantages = (advantages - torch.min(advantages)) / (torch.max(advantages) - torch.min(advantages) + 1e-8)
-                    vt_term = (vt_term - torch.min(vt_term)) / (torch.max(vt_term) - torch.min(vt_term) + 1e-8)
-                    div_term = (div_term - torch.min(div_term)) / (torch.max(div_term) - torch.min(div_term) + 1e-8)
+                    advantages = (advantages - torch.min(advantages)) / (
+                        torch.max(advantages) - torch.min(advantages) + 1e-8
+                    )
+                    vt_term = (vt_term - torch.min(vt_term)) / (
+                        torch.max(vt_term) - torch.min(vt_term) + 1e-8
+                    )
+                    div_term = (div_term - torch.min(div_term)) / (
+                        torch.max(div_term) - torch.min(div_term) + 1e-8
+                    )
 
                     # Add terms to advantages
-                    advantages = (self.beta_0 * advantages + self.beta_1 * vt_term + self.beta_2 * div_term)
+                    advantages = (
+                        self.beta_0 * advantages
+                        + self.beta_1 * vt_term
+                        + self.beta_2 * div_term
+                    )
                 elif self.ad_reg == "sellf":
                     vt_term = torch.min(
                         torch.zeros(rollout_data.deltas.shape[0]).to(self.device),
-                        -rollout_data.deltas + torch.tensor(self.omega / 2, dtype=torch.float32)
+                        -rollout_data.deltas
+                        + torch.tensor(self.omega / 2, dtype=torch.float32),
                     )
 
-                    advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
-                    vt_term = (vt_term - torch.min(vt_term)) / (torch.max(vt_term) - torch.min(vt_term) + 1e-8)
+                    advantages = (advantages - advantages.mean()) / (
+                        advantages.std() + 1e-8
+                    )
+                    vt_term = (vt_term - torch.min(vt_term)) / (
+                        torch.max(vt_term) - torch.min(vt_term) + 1e-8
+                    )
 
                     advantages = self.beta_0 * advantages + self.beta_1 * vt_term
 
                 # Normalize advantage
                 if self.normalize_advantage:
-                    advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
-
+                    advantages = (advantages - advantages.mean()) / (
+                        advantages.std() + 1e-8
+                    )
 
                 # ratio between old and new policy, should be one at the first iteration
                 ratio = th.exp(log_prob - rollout_data.old_log_prob)
 
-
                 # clipped surrogate loss
                 policy_loss_1 = advantages * ratio
-                policy_loss_2 = advantages * th.clamp(ratio, 1 - clip_range, 1 + clip_range)
+                policy_loss_2 = advantages * th.clamp(
+                    ratio, 1 - clip_range, 1 + clip_range
+                )
                 policy_loss = -th.min(policy_loss_1, policy_loss_2).mean()
 
                 # Logging
@@ -399,15 +454,45 @@ class PPO(OnPolicyAlgorithm):
                     # Accept rate disparity loss
                     g0_idx = (rollout_data.groups[:, 0] == 1).nonzero()
                     g1_idx = (rollout_data.groups[:, 1] == 1).nonzero()
-                    prob_accept = self.policy.prob_loan(rollout_data.observations)
+                    if len(g0_idx) != 0 and len(g1_idx) != 0:
+                        prob_accept = self.policy.prob_loan(rollout_data.observations)
+                        reject_g0 = 1 - prob_accept[g0_idx].to(th.float32).mean()
+                        reject_g1 = 1 - prob_accept[g1_idx].to(th.float32).mean()
+                        if self.utility_method != "tpr":
+                            accept_g0_batch = reject_g0 * error_rejected[0]
+                            accept_g1_batch = reject_g1 * error_rejected[1]
+                        else:
+                            mean_imputation_g0 = (
+                                rollout_data.imputations[g0_idx].mean().item()
+                            )
+                            mean_imputation_g1 = (
+                                rollout_data.imputations[g1_idx].mean().item()
+                            )
+                            if mean_imputation_g0 == 0 or mean_imputation_g1 == 0:
+                                accept_g0_batch = 0
+                                accept_g1_batch = 0
+                            else:
+                                accept_g0_batch = reject_g0 * error_rejected[0] / mean_imputation_g0
+                                accept_g1_batch = reject_g1 * error_rejected[1] / mean_imputation_g1
+                                accept_g0_batch_list.append(
+                                    (error_rejected[0] / mean_imputation_g0).item()
+                                )
+                                accept_g1_batch_list.append(
+                                    (error_rejected[1] / mean_imputation_g1).item()
+                                )
+                        delta_accept = (accept_g0_batch - accept_g1_batch) ** 2
 
-                    accept_g0_batch = (1 - prob_accept[g0_idx].to(th.float32).mean()) * error_rejected[0]
-                    accept_g1_batch = (1 - prob_accept[g1_idx].to(th.float32).mean()) * error_rejected[1]
-                    delta_accept = (accept_g0_batch - accept_g1_batch) ** 2
+                    else:
+                        delta_accept = th.tensor([0.0]).to(self.device)
                 else:
-                    delta_accept = th.tensor([0.]).to(self.device)
+                    delta_accept = th.tensor([0.0]).to(self.device)
 
-                loss = policy_loss + self.ent_coef * entropy_loss + self.vf_coef * value_loss + self.beta_3 * delta_accept
+                loss = (
+                    policy_loss
+                    + self.ent_coef * entropy_loss
+                    + self.vf_coef * value_loss
+                    + self.beta_3 * delta_accept
+                )
 
                 # Calculate approximate form of reverse KL Divergence for early stopping
                 # see issue #417: https://github.com/DLR-RM/stable-baselines3/issues/417
@@ -415,42 +500,60 @@ class PPO(OnPolicyAlgorithm):
                 # and Schulman blog: http://joschu.net/blog/kl-approx.html
                 with th.no_grad():
                     log_ratio = log_prob - rollout_data.old_log_prob
-                    approx_kl_div = th.mean((th.exp(log_ratio) - 1) - log_ratio).cpu().numpy()
+                    approx_kl_div = (
+                        th.mean((th.exp(log_ratio) - 1) - log_ratio).cpu().numpy()
+                    )
                     approx_kl_divs.append(approx_kl_div)
 
                 if self.target_kl is not None and approx_kl_div > 1.5 * self.target_kl:
                     continue_training = False
                     if self.verbose >= 1:
-                        print(f"Early stopping at step {epoch} due to reaching max kl: {approx_kl_div:.2f}")
+                        print(
+                            f"Early stopping at step {epoch} due to reaching max kl: {approx_kl_div:.2f}"
+                        )
                     break
 
                 # Optimization step
                 self.policy.optimizer.zero_grad()
                 loss.backward()
                 # Clip grad norm
-                th.nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
+                th.nn.utils.clip_grad_norm_(
+                    self.policy.parameters(), self.max_grad_norm
+                )
                 self.policy.optimizer.step()
 
             if not continue_training:
                 break
 
         self._n_updates += self.n_epochs
-        explained_var = explained_variance(self.rollout_buffer.values.flatten(), self.rollout_buffer.returns.flatten())
+        explained_var = explained_variance(
+            self.rollout_buffer.values.flatten(), self.rollout_buffer.returns.flatten()
+        )
 
         g0_idx = (self.rollout_buffer.groups[:, 0] == 1).nonzero()
         g1_idx = (self.rollout_buffer.groups[:, 1] == 1).nonzero()
 
         accept_rate = [
             self.rollout_buffer.actions[g0_idx, 0].mean().item(),
-            self.rollout_buffer.actions[g1_idx, 0].mean().item()
+            self.rollout_buffer.actions[g1_idx, 0].mean().item(),
         ]
 
-        g0_y1_idx = (self.rollout_buffer.groups[:, 0] == 1) & (self.rollout_buffer.labels[:, 0] == 1)
-        g1_y1_idx = (self.rollout_buffer.groups[:, 1] == 1) & (self.rollout_buffer.labels[:, 0] == 1)
+        g0_y1_idx = (self.rollout_buffer.groups[:, 0] == 1) & (
+            self.rollout_buffer.labels[:, 0] == 1
+        )
+        g1_y1_idx = (self.rollout_buffer.groups[:, 1] == 1) & (
+            self.rollout_buffer.labels[:, 0] == 1
+        )
         tpr_rate = [
             self.rollout_buffer.actions[g0_y1_idx, 0].mean().item(),
-            self.rollout_buffer.actions[g1_y1_idx, 0].mean().item()
+            self.rollout_buffer.actions[g1_y1_idx, 0].mean().item(),
         ]
+
+        accuracy = (
+            (self.rollout_buffer.labels[:, 0] == self.rollout_buffer.preds[:, 0])
+            .mean()
+            .item()
+        )
         # Logs
         self.logger.record("train/entropy_loss", np.mean(entropy_losses))
         self.logger.record("train/policy_gradient_loss", np.mean(pg_losses))
@@ -459,27 +562,60 @@ class PPO(OnPolicyAlgorithm):
         self.logger.record("train/clip_fraction", np.mean(clip_fractions))
         self.logger.record("train/loss", loss.item())
         self.logger.record("train/explained_variance", explained_var)
-        self.logger.record("train/accept_rate", np.mean(self.rollout_buffer.actions.flatten()))
-        self.logger.record("train/pos_rate", np.mean(self.rollout_buffer.labels.flatten()))
+        self.logger.record(
+            "train/accept_rate", np.mean(self.rollout_buffer.actions.flatten())
+        )
+        self.logger.record(
+            "train/pos_rate", np.mean(self.rollout_buffer.labels.flatten())
+        )
         self.logger.record("train/accept_g0", accept_rate[0])
         self.logger.record("train/accept_g1", accept_rate[1])
         self.logger.record("train/tpr_g0", tpr_rate[0])
         self.logger.record("train/tpr_g1", tpr_rate[1])
-        #self.logger.record("train/error_accepted", error_accepted_all.item())
+        # self.logger.record("train/error_accepted", error_accepted_all.item())
         self.logger.record("train/error_a0_g0", error_rejected[0].item())
         self.logger.record("train/error_a0_g1", error_rejected[1].item())
-        #self.logger.record("train/error_a1_g0", error_accepted[0].item())
-        #self.logger.record("train/error_a1_g1", error_accepted[1].item())
-        #self.logger.record("train/error_hat_a0_g0", error_rejected_estimate[0].item())
-        #self.logger.record("train/error_hat_a0_g1", error_rejected_estimate[1].item())
-        #self.logger.record("train/b_g0", (1 - accept_rate[0]) * error_rejected[0].item())
-        #self.logger.record("train/b_g1", (1 - accept_rate[1]) * error_rejected[1].item())
-        #self.logger.record("train/b_hat_g0", (1 - accept_rate[0]) * error_rejected_estimate[0].item())
-        #self.logger.record("train/b_hat_g1", (1 - accept_rate[1]) * error_rejected_estimate[1].item())
-        self.logger.record("train/delta_b_term", self.rollout_buffer.delta_b_terms.mean().item())
+        self.logger.record("train/accept_g0_batch", np.mean(accept_g0_batch_list))
+        self.logger.record("train/accept_g1_batch", np.mean(accept_g1_batch_list))
+        # self.logger.record("train/error_a1_g0", error_accepted[0].item())
+        # self.logger.record("train/error_a1_g1", error_accepted[1].item())
+        # self.logger.record("train/error_hat_a0_g0", error_rejected_estimate[0].item())
+        # self.logger.record("train/error_hat_a0_g1", error_rejected_estimate[1].item())
+        # self.logger.record("train/b_g0", (1 - accept_rate[0]) * error_rejected[0].item())
+        # self.logger.record("train/b_g1", (1 - accept_rate[1]) * error_rejected[1].item())
+        # self.logger.record("train/b_hat_g0", (1 - accept_rate[0]) * error_rejected_estimate[0].item())
+        # self.logger.record("train/b_hat_g1", (1 - accept_rate[1]) * error_rejected_estimate[1].item())
+        self.logger.record(
+            "train/delta_b_term", self.rollout_buffer.delta_b_terms.mean().item()
+        )
         self.logger.record("train/delta", self.rollout_buffer.deltas.mean().item())
-        self.logger.record("train/delta_delta", self.rollout_buffer.delta_deltas.mean().item())
-        self.logger.record("train/delta_real", self.rollout_buffer.delta_reals.mean().item())
+        self.logger.record(
+            "train/delta_delta", self.rollout_buffer.delta_deltas.mean().item()
+        )
+        self.logger.record(
+            "train/delta_real", self.rollout_buffer.delta_reals.mean().item()
+        )
+        self.logger.record("train/accuracy", accuracy)
+
+        g0_idx = (self.rollout_buffer.groups[:, 0] == 1).nonzero()
+        g1_idx = (self.rollout_buffer.groups[:, 1] == 1).nonzero()
+
+        with th.no_grad():
+            obs = th.Tensor(self.rollout_buffer.observations).to(self.device)
+            prob_accept = self.policy.prob_loan(obs)
+
+        mean_g0 = prob_accept[g0_idx].mean().item()
+        mean_g1 = prob_accept[g1_idx].mean().item()
+
+        concentration_g0 = torch.abs(prob_accept[g0_idx] - mean_g0).mean().item()
+        concentration_g1 = torch.abs(prob_accept[g1_idx] - mean_g1).mean().item()
+
+        self.logger.record("train/a0", mean_g0)
+        self.logger.record("train/a1", mean_g1)
+        self.logger.record("train/d0", concentration_g0)
+        self.logger.record("train/d1", concentration_g1)
+        self.logger.record("train/d0÷a0", concentration_g0 / mean_g0)
+        self.logger.record("train/d1÷a1", concentration_g1 / mean_g1)
 
         if hasattr(self.policy, "log_std"):
             self.logger.record("train/std", th.exp(self.policy.log_std).mean().item())
@@ -490,16 +626,16 @@ class PPO(OnPolicyAlgorithm):
             self.logger.record("train/clip_range_vf", clip_range_vf)
 
     def learn(
-            self,
-            total_timesteps: int,
-            callback: MaybeCallback = None,
-            log_interval: int = 1,
-            eval_env: Optional[GymEnv] = None,
-            eval_freq: int = -1,
-            n_eval_episodes: int = 5,
-            tb_log_name: str = "PPO",
-            eval_log_path: Optional[str] = None,
-            reset_num_timesteps: bool = True,
+        self,
+        total_timesteps: int,
+        callback: MaybeCallback = None,
+        log_interval: int = 1,
+        eval_env: Optional[GymEnv] = None,
+        eval_freq: int = -1,
+        n_eval_episodes: int = 5,
+        tb_log_name: str = "PPO",
+        eval_log_path: Optional[str] = None,
+        reset_num_timesteps: bool = True,
     ) -> "PPO":
 
         return super(PPO, self).learn(
