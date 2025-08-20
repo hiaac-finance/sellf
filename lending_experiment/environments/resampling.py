@@ -343,32 +343,36 @@ class EnemEnv(ResamplingEnv):
 
     def load_pool(self, params):
         with open("data/enem_pool.pkl", "rb") as f:
-            data = pkl.load(f)
+            self.init_pool = pkl.load(f)
 
         with open("data/enem_model.pkl", "rb") as f:
-            model = pkl.load(f)
-        
-        self.predict_fn = ...
-        self.init_pool = ...
+            self.model = pkl.load(f)
+
+        def sample_label(x):
+            p = self.model.predict_proba(x.reshape(1, -1))[0, 1]
+            return 1 if np.random.rand() < p else 0
+
+        self.label_fn = sample_label
         self.pool = copy.deepcopy(self.init_pool)
 
     def updated_applicant(self, state, action):
         if action == 1:
             return
-
+        age_groups = 6
         idx = state.idx
         features = state.applicant_features
-        age = ...
-        new_age = min(age + 1, params.max_age)
+        group = np.argmax(state.group)
+        age_features = features[(age_groups * group):(age_groups * (group + 1))]
+        age = np.argmax(age_features)
+        new_age = min(age + 1, age_groups - 1)
 
         new_features = features.copy()
-        new_features[age] = 0
-        new_features[new_age] = 1
+        new_features[int(age_groups * group + age)] = 0
+        new_features[int(age_groups * group + new_age)] = 1
 
         self.pool[idx]["features"] = new_features
         state.applicant_features = new_features
 
-        group = np.argmax(state.group)
         label = self.label_fn(group, new_age)
         self.pool[idx]["label"] = label
         state.label = label
