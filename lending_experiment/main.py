@@ -179,7 +179,7 @@ def main(config):
         f.write(f"Train Timesteps: {config['train_timesteps']}\n")
 
     exp_dir = (
-        f"./experiments/{config['env_name']}/{config['mu_type']}/{config['algorithm']}"
+        f"./experiments/{config['env_name']}/{config['mu_type']}/{config['exp_name']}"
     )
     save_dir = f"{exp_dir}/models"
     eval_dir = f"{exp_dir}/eval"
@@ -223,7 +223,8 @@ def main(config):
 
 if __name__ == "__main__":
     env_name = "fico"
-    train_timesteps = 250_000
+    train_timesteps = 200_000
+
     algorithms_params = {
         "sellf" :{
             "ad_reg": "sellf",
@@ -251,10 +252,11 @@ if __name__ == "__main__":
         },
     }
 
-    for algo, algo_params in algorithms_params.items():
+    for exp_name, algo_params in algorithms_params.items():
         config = {
+            "exp_name" : exp_name,
             "env_name": "fico",
-            "algorithm": algo,
+            "algorithm": "sellf",
             "train_timesteps": train_timesteps,
             "mu_type": "accuracy",
             "omega": 0.05,
