@@ -9,7 +9,7 @@ from lending_experiment.environments import core
 
 
 @attr.s
-class Params(core.Params):
+class Params(object):
     num_groups = attr.ib(default=2)
     gain = attr.ib(default=0.25)
     starting_resource = attr.ib(default=1_000.0)
@@ -19,7 +19,7 @@ class Params(core.Params):
 
 
 @attr.s(cmp=False)
-class State(core.State):
+class State(object):
     """
     State for the resampling environment.
     """
@@ -114,6 +114,7 @@ class ResamplingEnv(core.FairnessEnv):
 
     def reset(self):
         """Resets the environment."""
+        self.timestep = 0
         self.pool = copy.deepcopy(self.init_pool)
         self.utility_matrix = copy.deepcopy(self.init_utility_matrix)
         self.active_matrix = copy.deepcopy(self.init_active_matrix)
@@ -124,9 +125,10 @@ class ResamplingEnv(core.FairnessEnv):
         return super(ResamplingEnv, self).reset()
 
     def _is_done(self):
-        return self.state.resource <= 0
+        return self.state.resource <= 0 or self.timestep >= 10_000
 
     def _step_impl(self, state, action):
+        self.timestep += 1
         self.update_resource(self.state, action)
         self.update_utility(
             self.state.idx,

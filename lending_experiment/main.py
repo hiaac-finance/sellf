@@ -223,15 +223,25 @@ def main(config):
 
 if __name__ == "__main__":
     env_name = "fico"
-    train_timesteps = 1_000
-
-    config = {
-        "env_name": "fico",
-        "algorithm": "sellf",
-        "train_timesteps": 1_000,
-        "mu_type": "accuracy",
-        "omega": 0.05,
-        "algorithm_params": {
+    train_timesteps = 250_000
+    algorithms_params = {
+        "sellf" :{
+            "ad_reg": "sellf",
+            "learning_rate": 1e-5,
+            "beta_0": 1,
+            "beta_1": 5,
+            "beta_3": 3,
+            "bound_type": "var_up",
+        },
+        "sellf1" :{
+            "ad_reg": "sellf",
+            "learning_rate": 1e-5,
+            "beta_0": 1,
+            "beta_1": 5,
+            "beta_3": 3,
+            "bound_type": "diff",
+        },
+        "sellf2" :{
             "ad_reg": "sellf",
             "learning_rate": 1e-5,
             "beta_0": 1,
@@ -241,4 +251,14 @@ if __name__ == "__main__":
         },
     }
 
-    main(config)
+    for algo, algo_params in algorithms_params.items():
+        config = {
+            "env_name": "fico",
+            "algorithm": algo,
+            "train_timesteps": train_timesteps,
+            "mu_type": "accuracy",
+            "omega": 0.05,
+            "algorithm_params": algo_params,
+        }
+
+        main(config)

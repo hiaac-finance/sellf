@@ -21,9 +21,8 @@ def bound_error(
     prob_label: th.Tensor,
     prob_accept: th.Tensor,
     accept: th.Tensor,
-    bound_type: str = "diff",
+    bound_type: str = "var_up",
 ):
-    assert bound_type in ["diff", "var", "kl"]
 
     accept_error = (prob_label - labels)[accept == 1]
     accept_error = th.mean(accept_error) if accept_error.numel() > 0 else 0
@@ -34,8 +33,12 @@ def bound_error(
         dist = th.abs(prob_accept - a).mean() / (a * r)
     elif bound_type == "var":
         dist = th.std(prob_accept) / (a * r)
+    elif bound_type == "var_up":
+        dist = th.sqrt(a - a** 2) / (a * r)
     elif bound_type == "kl":
         raise Exception("Not implemented yet")
+    else:
+        raise ValueError(f"Invalid bound type: {bound_type}")
 
     return accept_error + dist
 
@@ -276,7 +279,7 @@ class PPO(OnPolicyAlgorithm):
                 preds_accept = self.policy.prob_loan(rollout_data.observations)
                 probs_accept.append(preds_accept)
         
-        labels = torch.Tensor(self.rollout_buffer.labels[:, 0]).to(self.device)
+        labels = th.Tensor(self.rollout_buffer.labels[:, 0]).to(self.device)
         probs_label = th.cat(probs_label).flatten()
         accept = th.Tensor(self.rollout_buffer.actions[:, 0]).to(self.device)
         probs_accept = th.cat(probs_accept).flatten()
@@ -356,33 +359,33 @@ class PPO(OnPolicyAlgorithm):
                 # Advantage regularization for fairness here
                 if self.ad_reg == "pocar":
                     # Compute value-thresholding (vt) term as part of Eq. 3 from the paper
-                    vt_term = torch.min(
-                        torch.zeros(rollout_data.deltas.shape[0]).to(self.device),
+                    vt_term = th.min(
+                        th.zeros(rollout_data.deltas.shape[0]).to(self.device),
                         -rollout_data.deltas
-                        + torch.tensor(self.omega, dtype=torch.float32),
+                        + th.tensor(self.omega, dtype=th.float32),
                     )
 
                     # Compute decrease-in-violation (div) term as part of Eq. 3 from the paper
-                    div_cond = torch.where(
+                    div_cond = th.where(
                         rollout_data.deltas
-                        > torch.tensor(self.omega, dtype=torch.float32).to(self.device),
-                        torch.tensor(1, dtype=torch.float32).to(self.device),
-                        torch.tensor(0, dtype=torch.float32).to(self.device),
+                        > th.tensor(self.omega, dtype=th.float32).to(self.device),
+                        th.tensor(1, dtype=th.float32).to(self.device),
+                        th.tensor(0, dtype=th.float32).to(self.device),
                     )
-                    div_term = torch.min(
-                        torch.zeros(rollout_data.delta_deltas.shape[0]).to(self.device),
+                    div_term = th.min(
+                        th.zeros(rollout_data.delta_deltas.shape[0]).to(self.device),
                         -div_cond * rollout_data.delta_deltas,
                     )
 
                     # Bring the 3 terms to scale for numerical stability
-                    advantages = (advantages - torch.min(advantages)) / (
-                        torch.max(advantages) - torch.min(advantages) + 1e-8
+                    advantages = (advantages - th.min(advantages)) / (
+                        th.max(advantages) - th.min(advantages) + 1e-8
                     )
-                    vt_term = (vt_term - torch.min(vt_term)) / (
-                        torch.max(vt_term) - torch.min(vt_term) + 1e-8
+                    vt_term = (vt_term - th.min(vt_term)) / (
+                        th.max(vt_term) - th.min(vt_term) + 1e-8
                     )
-                    div_term = (div_term - torch.min(div_term)) / (
-                        torch.max(div_term) - torch.min(div_term) + 1e-8
+                    div_term = (div_term - th.min(div_term)) / (
+                        th.max(div_term) - th.min(div_term) + 1e-8
                     )
 
                     # Add terms to advantages
@@ -392,17 +395,17 @@ class PPO(OnPolicyAlgorithm):
                         + self.beta_2 * div_term
                     )
                 elif self.ad_reg == "sellf":
-                    vt_term = torch.min(
-                        torch.zeros(rollout_data.deltas.shape[0]).to(self.device),
+                    vt_term = th.min(
+                        th.zeros(rollout_data.deltas.shape[0]).to(self.device),
                         -rollout_data.deltas
-                        + torch.tensor(self.omega / 2, dtype=torch.float32),
+                        + th.tensor(self.omega / 2, dtype=th.float32),
                     )
 
                     advantages = (advantages - advantages.mean()) / (
                         advantages.std() + 1e-8
                     )
-                    vt_term = (vt_term - torch.min(vt_term)) / (
-                        torch.max(vt_term) - torch.min(vt_term) + 1e-8
+                    vt_term = (vt_term - th.min(vt_term)) / (
+                        th.max(vt_term) - th.min(vt_term) + 1e-8
                     )
 
                     advantages = self.beta_0 * advantages + self.beta_1 * vt_term
@@ -607,8 +610,8 @@ class PPO(OnPolicyAlgorithm):
         mean_g0 = prob_accept[g0_idx].mean().item()
         mean_g1 = prob_accept[g1_idx].mean().item()
 
-        concentration_g0 = torch.abs(prob_accept[g0_idx] - mean_g0).mean().item()
-        concentration_g1 = torch.abs(prob_accept[g1_idx] - mean_g1).mean().item()
+        concentration_g0 = th.abs(prob_accept[g0_idx] - mean_g0).mean().item()
+        concentration_g1 = th.abs(prob_accept[g1_idx] - mean_g1).mean().item()
 
         self.logger.record("train/a0", mean_g0)
         self.logger.record("train/a1", mean_g1)
