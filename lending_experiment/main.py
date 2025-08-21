@@ -2,15 +2,11 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-import argparse
-import copy
-import functools
 import os
 import random
 import shutil
 from pathlib import Path
 import time
-from omegaconf import OmegaConf
 
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
@@ -18,82 +14,95 @@ os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 import numpy as np
 import pandas as pd
 import torch
-import tqdm
-import pickle as pkl
-from absl import flags
 from stable_baselines3.common.callbacks import CheckpointCallback
 from stable_baselines3.common.logger import configure
-#from stable_baselines3.common.monitor import Monitor
-from stable_baselines3.common.vec_env import DummyVecEnv
-from yaml import full_load
 
-import sys; sys.path.append('..')
+# from stable_baselines3.common.monitor import Monitor
+from stable_baselines3.common.vec_env import DummyVecEnv
+
+import sys
+
+sys.path.append("..")
 
 from lending_experiment.agents.ppo.ppo_wrapper_env import PPOEnvWrapper, Monitor
 from lending_experiment.agents.ppo.sb3.ppo import PPO
 
-from lending_experiment.environments.resampling import ResamplingEnv, LendingEnv, Params as ResamplingParams
+from lending_experiment.environments.resampling import (
+    ResamplingEnv,
+    LendingEnv,
+    EnemEnv,
+    Params as ResamplingParams,
+)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print('Using device: ', device)
+print("Using device: ", device)
 torch.cuda.empty_cache()
 
-def get_env(env_name: str, utility_method: str, delta_method: str) -> ResamplingEnv:
-    params = ResamplingParams()
-    env = LendingEnv(params, utility_method=utility_method, delta_method=delta_method)
+EXP_DIR = "./experiments"
+
+
+def get_env(env_name: str, utility_method: str, algorithm: str) -> ResamplingEnv:
+    if algorithm == "pocar_full":
+        delta_method = "full"
+    elif algorithm == "sellf":
+        delta_method = "imputation"
+    else:
+        delta_method = "accepted"
+    if env_name == "fico":
+        params = ResamplingParams()
+        env = LendingEnv(
+            params, utility_method=utility_method, delta_method=delta_method
+        )
+    elif env_name == "enem":
+        params = ResamplingParams()
+        params.num_features = 130
+        env = EnemEnv()
     return env
 
 
-def train(train_timesteps, env, config):
+def train(train_timesteps, env, save_dir, config):
 
-    exp_dir = os.path.join(config.general.exp_dir, config.general.env_name)
-    save_dir = os.path.join(exp_dir, config.general.algorithm, "models")
+    # print("env_params: ", env.state.params)
 
-    print('env_params: ', env.state.params)
-
-    env = PPOEnvWrapper(
-        env=env, 
-        ep_timesteps=config.environment.ep_timesteps,
-    )
+    env = PPOEnvWrapper(env=env)
     env = Monitor(env)
     env = DummyVecEnv([lambda: env])
 
+    use_predictor = config["algorithm"] == "sellf"
 
     model = PPO(
-        "MlpPolicy", 
+        "MlpPolicy",
         env,
         policy_kwargs={
-            "use_predictor": config.policy.use_predictor,
+            "use_predictor": use_predictor,
             "activation_fn": torch.nn.ReLU,
             "net_arch": [256, 256, dict(vf=[256, 128], pi=[256, 128])],
         },
         verbose=0,
-        omega=config.environment.omega,
+        omega=config["omega"],
         device=device,
-        **config.algorithm
+        **config["algorithm_params"],
     )
     env.env_method("set_agent", model)
 
     shutil.rmtree(save_dir, ignore_errors=True)
     Path(save_dir).mkdir(parents=True, exist_ok=True)
 
-    checkpoint_callback = CheckpointCallback(save_freq=10_000, save_path=save_dir,
-                                             name_prefix='rl_model')
+    checkpoint_callback = CheckpointCallback(
+        save_freq=10_000, save_path=save_dir, name_prefix="rl_model"
+    )
 
     model.set_logger(configure(folder=save_dir))
     model.learn(total_timesteps=train_timesteps, callback=checkpoint_callback)
-    model.save(save_dir + '/final_model')
+    model.save(save_dir + "/final_model")
 
     # Once we finish learning, plot the returns over time and save into the experiments directory
-    #plot_rets(EXP_DIR)
+    # plot_rets(EXP_DIR)
 
-def evaluate(env, agent, num_eps, num_timesteps, name, seeds, eval_path):
-    print()
-    print(f"Evaluating {name}")
-    Path(f'{eval_path}/{name}/').mkdir(parents=True, exist_ok=True)
+
+def evaluate(env, agent, seeds, eval_dir):
     eval_data = []
-
-
+    num_eps = len(seeds)
     for ep in range(num_eps):
         random.seed(seeds[ep])
         np.random.seed(seeds[ep])
@@ -102,6 +111,7 @@ def evaluate(env, agent, num_eps, num_timesteps, name, seeds, eval_path):
         # Make predictions for everyone
         action_list = []
         pred_list = []
+        acc = []
         for idx in range(env.num_applicants):
             obs = env.get_applicant_obs(idx)
             obs = np.array(obs).reshape(1, -1)
@@ -110,14 +120,16 @@ def evaluate(env, agent, num_eps, num_timesteps, name, seeds, eval_path):
             pred = agent.policy.predict_label(obs).item()
             action_list.append(action)
             pred_list.append(pred)
-        
+            label = env.pool[idx]["label"]
+            acc.append(int(label == pred))
+        print(f"Mean accuracy: {np.mean(acc)}")
+
         env.set_action_pred(action_list, pred_list)
 
         obs = env.reset()
         done = False
-        print(f'Episode {ep}:')
-
-        for t in tqdm.trange(num_timesteps):
+        t = 0
+        while not done:
             action = None
             if isinstance(agent, PPO):
                 action = agent.predict(obs)[0]
@@ -133,113 +145,73 @@ def evaluate(env, agent, num_eps, num_timesteps, name, seeds, eval_path):
             label = env.state.label
             obs, _, done, _ = env.step(action)
             resource = env.state.resource
-            eval_data.append({
-                "ep" : ep,
-                "t" : t,
-                "group_id" : group_id,
-                "action" : action,
-                "label" : label,
-                "pred" : pred,
-                "correct" : int(label == pred),
-                "resource" : resource,
-                "delta" : env.state.delta,
-                "delta_real" : env.state.delta_real,
-            })
-        
+            eval_data.append(
+                {
+                    "ep": ep,
+                    "t": t,
+                    "group_id": group_id,
+                    "action": action,
+                    "label": label,
+                    "pred": pred,
+                    "correct": int(label == pred),
+                    "resource": resource,
+                    "delta": env.state.delta,
+                    "delta_real": env.state.delta_real,
+                }
+            )
+            t += 1
             if done:
                 break
 
-    Path(f'{eval_path}').mkdir(parents=True, exist_ok=True)
     eval_data = pd.DataFrame(eval_data)
-    eval_data.to_csv(f'{eval_path}/eval_data.csv', index=False)
+    eval_data.to_csv(f"{eval_dir}/eval_data.csv", index=False)
 
     return eval_data
 
 
-def validate_config(parameters):
-    if isinstance(parameters, dict):
-        params = OmegaConf.create(parameters)
-    
-    elif isinstance(parameters, (str, Path)):
-        params = OmegaConf.load(parameters)
-    
-    else:
-        raise ValueError("Invalid parameters type")
-
-    #validated_config = OmegaConf.merge(template, params)
-    #validated_config = cast(Config, validated_config)
-
-    return params
-
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("config_path", nargs="?", type=str, help="Path to the config file")
-    args = parser.parse_args()
-
-    if args.config_path is None:
-        config = "config_files/yu2022/ppo.yaml"
-    else:
-        config = args.config_path
-    
-    config = validate_config(config)
-
+def main(config):
     start = time.time()
     with open("log.txt", "a") as f:
         f.write("\n-------------------------------------------------------------\n")
         f.write(f"Start time: {time.strftime('%H:%M:%S', time.localtime(start))}\n")
-        f.write(f"Environment: {config.general.env_name}\n")
-        f.write(f"Algorithm: {config.general.algorithm}\n")
-        f.write(f"Train Timesteps: {config.algorithm.train_timesteps}\n")
-        
-    env = get_env(config.general.env_name, config.environment.mu_type, config.environment.obs_type)
-    train(train_timesteps=config.algorithm.train_timesteps, env=env, config=config)
-    #    plot_rets(exp_path=EXP_DIR, save_png=True)
+        f.write(f"Environment: {config['env_name']}\n")
+        f.write(f"Algorithm: {config['algorithm']}\n")
+        f.write(f"Train Timesteps: {config['train_timesteps']}\n")
 
-    #if args.show_train_progress:
-    #    plot_rets(exp_path=EXP_DIR, save_png=False)
-
-    #if args.display_eval_path is not None:
-    #    display_eval_results(eval_dir=args.display_eval_path)
-
-    #print(args.eval_path)
-
-    eval_path = os.path.join(config.general.exp_dir, config.general.env_name, config.general.algorithm, "eval")
+    exp_dir = (
+        f"./experiments/{config['env_name']}/{config['mu_type']}/{config['algorithm']}"
+    )
+    save_dir = f"{exp_dir}/models"
+    eval_dir = f"{exp_dir}/eval"
+    env = get_env(config["env_name"], config["mu_type"], config["algorithm"])
+    train(
+        train_timesteps=config["train_timesteps"],
+        env=env,
+        save_dir=save_dir,
+        config=config,
+    )
 
     # Initialize eval directory to store eval information
-    shutil.rmtree(eval_path, ignore_errors=True)
-    Path(eval_path).mkdir(parents=True, exist_ok=True)
+    shutil.rmtree(eval_dir, ignore_errors=True)
+    Path(eval_dir).mkdir(parents=True, exist_ok=True)
 
     # Get random seeds
     eval_eps = 5
-    eval_timesteps = 10_000
     seeds = [random.randint(0, 10000) for _ in range(eval_eps)]
 
-    with open(eval_path + '/seeds.txt', 'w') as f:
+    with open(eval_dir + "/seeds.txt", "w") as f:
         f.write(str(seeds))
 
-    model_path = os.path.join(
-        config.general.exp_dir,
-        config.general.env_name,
-        config.general.algorithm,
-        "models",
-        "final_model.zip"
-    )
-    env = get_env(config.general.env_name, config.environment.mu_type, config.environment.obs_type)
-    name = config.general.algorithm
+    model_path = f"{save_dir}/final_model.zip"
     agent = PPO.load(model_path, verbose=1)
-    env = PPOEnvWrapper(
-        env=env, 
-        ep_timesteps=config.environment.ep_timesteps,
-    )
+    env = get_env(config["env_name"], config["mu_type"], config["algorithm"])
+    env = PPOEnvWrapper(env)
     env.set_agent(agent)
     evaluate(
         env=env,
         agent=agent,
-        num_eps=eval_eps,
-        num_timesteps=config.environment.ep_timesteps,
-        name=name,
         seeds=seeds,
-        eval_path=eval_path
+        eval_dir=eval_dir,
     )
 
     end = time.time()
@@ -249,5 +221,24 @@ def main():
         f.write("\n")
 
 
-if __name__ == '__main__':
-    main()
+if __name__ == "__main__":
+    env_name = "fico"
+    train_timesteps = 1_000
+
+    config = {
+        "env_name": "fico",
+        "algorithm": "sellf",
+        "train_timesteps": 1_000,
+        "mu_type": "accuracy",
+        "omega": 0.05,
+        "algorithm_params": {
+            "ad_reg": "sellf",
+            "learning_rate": 1e-5,
+            "beta_0": 1,
+            "beta_1": 5,
+            "beta_3": 3,
+            "bound_type": "var",
+        },
+    }
+
+    main(config)
