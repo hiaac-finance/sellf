@@ -33,12 +33,40 @@ from lending_experiment.environments.resampling import (
     EnemEnv,
     Params as ResamplingParams,
 )
+import argparse
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cpu")
 print("Using device: ", device)
 torch.cuda.empty_cache()
 
 EXP_DIR = "./experiments"
+
+ALG_PARAMS = {}
+ALG_PARAMS["ppo"] = {"ad_reg": "none", "learning_rate": 1e-5}
+ALG_PARAMS["sellf"] = {
+    "ad_reg": "sellf",
+    "learning_rate": 1e-5,
+    "beta_0": 1,
+    "beta_1": 0.5,
+    "beta_3": 0.5,
+}
+ALG_PARAMS["pocar_full"] = {
+    "ad_reg": "pocar",
+    "learning_rate": 1e-5,
+    "beta_0": 1,
+    "beta_1": 0.5,
+    "beta_2" : 0.5,
+    "beta_3": 0.,
+}
+ALG_PARAMS["pocar"] = {
+    "ad_reg": "pocar",
+    "learning_rate": 1e-5,
+    "beta_0": 1,
+    "beta_1": 0.5,
+    "beta_1": 0.5,
+    "beta_3": 0.,
+}
 
 
 def get_env(env_name: str, utility_method: str, algorithm: str) -> ResamplingEnv:
@@ -115,9 +143,9 @@ def evaluate(env, agent, seeds, eval_dir):
         for idx in range(env.num_applicants):
             obs = env.get_applicant_obs(idx)
             obs = np.array(obs).reshape(1, -1)
-            action = agent.predict(obs)[0]
             obs = torch.tensor(obs, dtype=torch.float32).to(device)
-            pred = agent.policy.predict_label(obs).item()
+            action = agent.policy.get_action(obs)[0]
+            pred = agent.policy.get_label(obs).item()
             action_list.append(action)
             pred_list.append(pred)
             label = env.pool[idx]["label"]
@@ -130,14 +158,15 @@ def evaluate(env, agent, seeds, eval_dir):
         done = False
         t = 0
         while not done:
-            action = None
-            if isinstance(agent, PPO):
-                action = agent.predict(obs)[0]
-            else:
-                action = agent.act(obs, done)
             obs = np.array(obs).reshape(1, -1)
             obs = torch.tensor(obs, dtype=torch.float32).to(device)
-            pred = agent.policy.predict_label(obs).item()
+            action = None
+            if isinstance(agent, PPO):
+                action = agent.policy.get_action(obs)[0]
+            else:
+                action = agent.act(obs, done)
+            action = action.item()
+            pred = agent.policy.get_label(obs).item()
 
             # Logging
             group_id = np.argmax(env.state.group)
@@ -179,7 +208,7 @@ def main(config):
         f.write(f"Train Timesteps: {config['train_timesteps']}\n")
 
     exp_dir = (
-        f"./experiments/{config['env_name']}/{config['mu_type']}/{config['algorithm']}"
+        f"./experiments/{config['env_name']}/{config['mu_type']}/{config['exp_name']}"
     )
     save_dir = f"{exp_dir}/models"
     eval_dir = f"{exp_dir}/eval"
@@ -203,10 +232,11 @@ def main(config):
         f.write(str(seeds))
 
     model_path = f"{save_dir}/final_model.zip"
-    agent = PPO.load(model_path, verbose=1)
+    agent = PPO.load(model_path, verbose=1, device=device)
     env = get_env(config["env_name"], config["mu_type"], config["algorithm"])
     env = PPOEnvWrapper(env)
     env.set_agent(agent)
+
     evaluate(
         env=env,
         agent=agent,
@@ -222,43 +252,21 @@ def main(config):
 
 
 if __name__ == "__main__":
-    env_name = "fico"
-    train_timesteps = 250_000
-    algorithms_params = {
-        "sellf" :{
-            "ad_reg": "sellf",
-            "learning_rate": 1e-5,
-            "beta_0": 1,
-            "beta_1": 5,
-            "beta_3": 3,
-            "bound_type": "var_up",
-        },
-        "sellf1" :{
-            "ad_reg": "sellf",
-            "learning_rate": 1e-5,
-            "beta_0": 1,
-            "beta_1": 5,
-            "beta_3": 3,
-            "bound_type": "diff",
-        },
-        "sellf2" :{
-            "ad_reg": "sellf",
-            "learning_rate": 1e-5,
-            "beta_0": 1,
-            "beta_1": 5,
-            "beta_3": 3,
-            "bound_type": "var",
-        },
+    args = argparse.ArgumentParser()
+    # params are the env_name, the algorithm, and the mu_type
+    args.add_argument("--env_name", type=str, default="fico")
+    args.add_argument("--algorithm", type=str, default="ppo")
+    args.add_argument("--mu_type", type=str, default="accuracy")
+    args = args.parse_args()
+
+    train_timesteps = 1_000
+    config = {
+        "exp_name": args.algorithm,
+        "env_name": args.env_name,
+        "algorithm": args.algorithm,
+        "train_timesteps": train_timesteps,
+        "mu_type": args.mu_type,
+        "omega": 0.05,
+        "algorithm_params": ALG_PARAMS[args.algorithm],
     }
-
-    for algo, algo_params in algorithms_params.items():
-        config = {
-            "env_name": "fico",
-            "algorithm": algo,
-            "train_timesteps": train_timesteps,
-            "mu_type": "accuracy",
-            "omega": 0.05,
-            "algorithm_params": algo_params,
-        }
-
-        main(config)
+    main(config)
