@@ -227,7 +227,7 @@ class PPO(OnPolicyAlgorithm):
 
         with th.no_grad():
             obs = th.Tensor(obs).to(self.device)
-            probs = self.policy.prob_loan(obs).cpu().numpy()
+            probs = self.policy.get_action_prob(obs).cpu().numpy()
             obs = obs.cpu().numpy()
 
         self.memory.add(obs=obs, label=labels, group=groups, prob=probs)
@@ -236,9 +236,9 @@ class PPO(OnPolicyAlgorithm):
         steps = 0
         for epoch in range(100):
             for i, rollout_data in enumerate(self.memory.get(self.batch_size)):
-                preds = self.policy.prob_label(rollout_data.observations)
+                preds = self.policy.get_label_prob(rollout_data.observations)
                 with th.no_grad():
-                    prob_loan = self.policy.prob_loan(rollout_data.observations)
+                    prob_loan = self.policy.get_action_prob(rollout_data.observations)
                     prob_loan = th.clamp(prob_loan, min=0.05, max=0.95)
 
                 pred_loss = pred_criterion(preds, rollout_data.labels)
@@ -261,7 +261,7 @@ class PPO(OnPolicyAlgorithm):
             if steps >= self.predictor_steps:
                 break
 
-            self.policy.scheduler.step()
+            #self.policy.scheduler.step()
 
         mean_loss = np.mean(losses_hist)
         self.logger.record("train/pred_loss", mean_loss)
@@ -274,9 +274,9 @@ class PPO(OnPolicyAlgorithm):
         probs_accept = []
         with th.no_grad():
             for rollout_data in self.rollout_buffer.get(self.batch_size):
-                preds_label = self.policy.prob_label(rollout_data.observations)
+                preds_label = self.policy.get_label_prob(rollout_data.observations)
                 probs_label.append(preds_label)
-                preds_accept = self.policy.prob_loan(rollout_data.observations)
+                preds_accept = self.policy.get_action_prob(rollout_data.observations)
                 probs_accept.append(preds_accept)
         
         labels = th.Tensor(self.rollout_buffer.labels[:, 0]).to(self.device)
@@ -304,7 +304,7 @@ class PPO(OnPolicyAlgorithm):
         Update policy using the currently gathered rollout buffer.
         """
         # Switch to train mode (this affects batch norm / dropout)
-        self.policy.set_training_mode(True)
+        self.policy.train()
         # Update optimizer learning rate
         self._update_learning_rate(self.policy.optimizer)
         # Compute current clip range
@@ -349,7 +349,7 @@ class PPO(OnPolicyAlgorithm):
                 if self.use_sde:
                     self.policy.reset_noise(self.batch_size)
 
-                values, log_prob, entropy = self.policy.evaluate_actions(
+                _, values, log_prob, entropy = self.policy.get_action_and_value(
                     rollout_data.observations, actions
                 )
                 values = values.flatten()
@@ -458,7 +458,7 @@ class PPO(OnPolicyAlgorithm):
                     g0_idx = (rollout_data.groups[:, 0] == 1).nonzero()
                     g1_idx = (rollout_data.groups[:, 1] == 1).nonzero()
                     if len(g0_idx) != 0 and len(g1_idx) != 0:
-                        prob_accept = self.policy.prob_loan(rollout_data.observations)
+                        prob_accept = self.policy.get_action_prob(rollout_data.observations)
                         reject_g0 = 1 - prob_accept[g0_idx].to(th.float32).mean()
                         reject_g1 = 1 - prob_accept[g1_idx].to(th.float32).mean()
                         if self.utility_method != "tpr":
@@ -605,7 +605,7 @@ class PPO(OnPolicyAlgorithm):
 
         with th.no_grad():
             obs = th.Tensor(self.rollout_buffer.observations).to(self.device)
-            prob_accept = self.policy.prob_loan(obs)
+            prob_accept = self.policy.get_action_prob(obs)
 
         mean_g0 = prob_accept[g0_idx].mean().item()
         mean_g1 = prob_accept[g1_idx].mean().item()

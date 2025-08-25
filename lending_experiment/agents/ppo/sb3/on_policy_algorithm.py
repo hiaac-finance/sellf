@@ -17,6 +17,7 @@ from stable_baselines3.common.vec_env import VecEnv
 
 from agents.ppo.sb3.buffers import RolloutBuffer, ReplayMemory
 from agents.ppo.sb3.policies import PredActorCriticPolicy, PredPolicy
+from agents.common.policy import Agent
 
 
 class OnPolicyAlgorithm(BaseAlgorithm):
@@ -128,25 +129,13 @@ class OnPolicyAlgorithm(BaseAlgorithm):
             self.action_space,
             device=self.device,
         )
-        if "rrm" in self.policy_kwargs and self.policy_kwargs["rrm"]:
-            policy_kwargs = self.policy_kwargs.copy()
-            del policy_kwargs["rrm"]
-            self.policy = PredPolicy( 
-                self.observation_space,
-                self.action_space,
-                self.lr_schedule,
-                use_sde=self.use_sde,
-                **policy_kwargs  
-            )
 
-        else:
-            self.policy = PredActorCriticPolicy( 
-                self.observation_space,
-                self.action_space,
-                self.lr_schedule,
-                use_sde=self.use_sde,
-                **self.policy_kwargs
-            )
+        self.policy = Agent(
+            observation_space=self.observation_space,
+            action_space=self.action_space,
+            learning_rate=self.learning_rate,
+            use_predictor=False,
+        )
         self.policy = self.policy.to(self.device)
 
     def collect_rollouts(
@@ -170,7 +159,7 @@ class OnPolicyAlgorithm(BaseAlgorithm):
         """
         assert self._last_obs is not None, "No previous observation was provided"
         # Switch to eval mode (this affects batch norm / dropout)
-        self.policy.set_training_mode(False)
+        self.policy.eval()
 
         # first, predict for everyone in the pool
         action_list = []
@@ -179,9 +168,9 @@ class OnPolicyAlgorithm(BaseAlgorithm):
             obs = env.env_method("get_applicant_obs", idx)[0]
             obs_tensor = obs_as_tensor(obs, self.device)
             obs_tensor = obs_tensor.unsqueeze(0)
-            action, _, _ = self.policy(obs_tensor)
+            action = self.policy.get_action(obs_tensor)
             action = action.cpu().numpy()
-            pred = self.policy.predict_label(obs_tensor).item()
+            pred = self.policy.get_label(obs_tensor).item()
             pred = env.get_attr("pool")[0][idx]['label']
             action_list.append(action)
             pred_list.append(pred)
@@ -204,9 +193,9 @@ class OnPolicyAlgorithm(BaseAlgorithm):
             with th.no_grad():
                 # Convert to pytorch tensor or to TensorDict
                 obs_tensor = obs_as_tensor(self._last_obs, self.device)
-                actions, values, log_probs = self.policy(obs_tensor)
+                actions, values, log_probs, _ = self.policy.get_action_and_value(obs_tensor)
                 #prob_loan = self.policy.prob_loan(obs_tensor)
-                label_pred = self.policy.predict_label(obs_tensor)
+                label_pred = self.policy.get_label(obs_tensor)
                 #label_prob = self.policy.prob_label(obs_tensor)
             actions = actions.cpu().numpy()
             #prob_loan = prob_loan.cpu().numpy()
@@ -256,7 +245,7 @@ class OnPolicyAlgorithm(BaseAlgorithm):
                 ):
                     terminal_obs = self.policy.obs_to_tensor(infos[idx]["terminal_observation"])[0]
                     with th.no_grad():
-                        terminal_value = self.policy.predict_values(terminal_obs)[0]
+                        terminal_value = self.policy.get_value(terminal_obs)[0]
                     rewards[idx] += self.gamma * terminal_value
 
 
@@ -272,7 +261,7 @@ class OnPolicyAlgorithm(BaseAlgorithm):
 
         with th.no_grad():
             # Compute value for the last timestep
-            values = self.policy.predict_values(obs_as_tensor(new_obs, self.device))
+            values = self.policy.get_value(obs_as_tensor(new_obs, self.device))
 
         rollout_buffer.compute_returns_and_advantage(last_values=values, dones=dones)
 
