@@ -10,7 +10,7 @@ from stable_baselines3.common.utils import obs_as_tensor
 from stable_baselines3.common.vec_env import VecEnv
 
 from agents.ppo.sb3.buffers import RolloutBuffer, ReplayMemory
-from agents.common.policy import Agent
+from lending_experiment.agents.policy import Agent
 from stable_baselines3.common.logger import Logger
 
 

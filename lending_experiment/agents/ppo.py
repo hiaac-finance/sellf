@@ -13,18 +13,14 @@ from stable_baselines3.common.vec_env import VecEnv
 from stable_baselines3.common.utils import explained_variance
 
 
-from lending_experiment.agents.ppo.sb3.on_policy_algorithm import OnPolicyAlgorithm
+from lending_experiment.agents.on_policy_algorithm import OnPolicyAlgorithm
 
 
-class POCAR(OnPolicyAlgorithm):
+class PPO(OnPolicyAlgorithm):
     def __init__(
         self,
         env: Union[gym.Env, VecEnv],
         learning_rate: float = 3e-4,
-        beta_0: float = 1,
-        beta_1: float = 0.5,
-        beta_2: float = 0.5,
-        omega: float =0.1,
         n_steps: int = 2048,
         batch_size: int = 64,
         n_epochs: int = 10,
@@ -41,7 +37,7 @@ class POCAR(OnPolicyAlgorithm):
         device: Union[th.device, str] = "auto",
     ):
 
-        super(POCAR, self).__init__(
+        super(PPO, self).__init__(
             env=env,
             learning_rate=learning_rate,
             n_steps=n_steps,
@@ -68,10 +64,6 @@ class POCAR(OnPolicyAlgorithm):
             else:
                 self.utility_method = env.get_attr("utility_method")[0]
 
-        self.beta_0 = beta_0
-        self.beta_1 = beta_1
-        self.beta_2 = beta_2
-        self.omega = omega
         self.batch_size = batch_size
         self.n_epochs = n_epochs
         self.clip_range = clip_range
@@ -109,42 +101,6 @@ class POCAR(OnPolicyAlgorithm):
                 values = values.flatten()
                 # Advantages shape: (batch_size,)
                 advantages = rollout_data.advantages
-
-                # Compute value-thresholding (vt) term as part of Eq. 3 from the paper
-                vt_term = th.min(
-                    th.zeros(rollout_data.deltas.shape[0]).to(self.device),
-                    -rollout_data.deltas + th.tensor(self.omega, dtype=th.float32),
-                )
-
-                # Compute decrease-in-violation (div) term as part of Eq. 3 from the paper
-                div_cond = th.where(
-                    rollout_data.deltas
-                    > th.tensor(self.omega, dtype=th.float32).to(self.device),
-                    th.tensor(1, dtype=th.float32).to(self.device),
-                    th.tensor(0, dtype=th.float32).to(self.device),
-                )
-                div_term = th.min(
-                    th.zeros(rollout_data.delta_deltas.shape[0]).to(self.device),
-                    -div_cond * rollout_data.delta_deltas,
-                )
-
-                # Bring the 3 terms to scale for numerical stability
-                advantages = (advantages - th.min(advantages)) / (
-                    th.max(advantages) - th.min(advantages) + 1e-8
-                )
-                vt_term = (vt_term - th.min(vt_term)) / (
-                    th.max(vt_term) - th.min(vt_term) + 1e-8
-                )
-                div_term = (div_term - th.min(div_term)) / (
-                    th.max(div_term) - th.min(div_term) + 1e-8
-                )
-
-                # Add terms to advantages
-                advantages = (
-                    self.beta_0 * advantages
-                    + self.beta_1 * vt_term
-                    + self.beta_2 * div_term
-                )
 
                 # Normalize advantage
                 if self.normalize_advantage:
@@ -226,6 +182,7 @@ class POCAR(OnPolicyAlgorithm):
         explained_var = explained_variance(
             self.rollout_buffer.values.flatten(), self.rollout_buffer.returns.flatten()
         )
+
 
         # Logs
         self.logger.record("train/entropy_loss", np.mean(entropy_losses))
