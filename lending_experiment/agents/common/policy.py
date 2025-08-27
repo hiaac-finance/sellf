@@ -5,6 +5,7 @@ import gym
 import torch
 import torch.nn as nn
 from torch.distributions.categorical import Categorical
+from torch.optim import lr_scheduler
 
 
 def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
@@ -40,21 +41,23 @@ class Agent(nn.Module):
         )
         self.predictor = nn.Sequential(
             layer_init(nn.Linear(self.features_dim, 64)),
-            nn.Tanh(),
+            nn.ReLU(),
             layer_init(nn.Linear(64, 64)),
-            nn.Tanh(),
-            layer_init(nn.Linear(64, 2), std=0.01),
+            nn.ReLU(),
+            layer_init(nn.Linear(64, 1), std=0.01),
         )
 
         self.pred_optimizer = torch.optim.Adam(
-            self.predictor.parameters(), lr=learning_rate
+            self.predictor.parameters(), lr=1e-3,
+        )
+        self.pred_scheduler = lr_scheduler.ExponentialLR(
+            self.pred_optimizer, gamma=0.97
         )
         self.optimizer = torch.optim.Adam(
             list(self.actor.parameters()) + list(self.critic.parameters()),
             lr=learning_rate,
-            eps = 1e-5,
+            eps=1e-5,
         )
-
 
     @property
     def device(self) -> torch.device:
@@ -72,7 +75,12 @@ class Agent(nn.Module):
         probs = Categorical(logits=logits)
         if action is None:
             action = probs.sample()
-        return action, self.critic(x), probs.log_prob(action), probs.entropy(), 
+        return (
+            action,
+            self.critic(x),
+            probs.log_prob(action),
+            probs.entropy(),
+        )
 
     def get_action(self, x: torch.Tensor) -> torch.Tensor:
         logits = self.actor(x)
@@ -83,10 +91,11 @@ class Agent(nn.Module):
     def get_label(self, x: torch.Tensor) -> torch.Tensor:
         if not self.use_predictor:
             return torch.zeros(x.size(0), dtype=torch.long, device=x.device)
-        logits = self.predictor(x)
-        probs = Categorical(logits=logits)
-        label = probs.sample()
-        return label
+        log_odds = self.predictor(x)
+        probs = torch.sigmoid(log_odds)
+        p = torch.rand((x.shape[0]), dtype=torch.float32, device=self.device)
+        labels = (probs > p).float()
+        return labels
 
     def get_action_prob(self, x: torch.Tensor) -> torch.Tensor:
         logits = self.actor(x)
@@ -97,7 +106,6 @@ class Agent(nn.Module):
     def get_label_prob(self, x: torch.Tensor) -> torch.Tensor:
         if not self.use_predictor:
             return torch.zeros(x.size(0), dtype=torch.float32, device=x.device)
-        logits = self.predictor(x)
-        probs = Categorical(logits=logits)
-        # return only prob of label 1
-        return probs.probs[:, 1]
+        log_odds = self.predictor(x)
+        probs = torch.sigmoid(log_odds)
+        return probs
