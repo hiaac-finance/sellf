@@ -1,6 +1,16 @@
 import warnings
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Generator, List, Optional, Union, Callable, NamedTuple, Tuple
+from typing import (
+    Any,
+    Dict,
+    Generator,
+    List,
+    Optional,
+    Union,
+    Callable,
+    NamedTuple,
+    Tuple,
+)
 
 from enum import Enum
 
@@ -33,15 +43,14 @@ class RolloutBufferSamples(NamedTuple):
     returns: th.Tensor
     deltas: th.Tensor
     delta_deltas: th.Tensor
-    delta_b_terms: th.Tensor
     delta_reals: th.Tensor
-    
+    delta_preds: th.Tensor
+    delta_vars: th.Tensor
+
+
 class ReplayMemorySamples(NamedTuple):
     observations: th.Tensor
     labels: th.Tensor
-    groups: th.Tensor
-    probs: th.Tensor
-
 
 
 class BaseBuffer(ABC):
@@ -163,7 +172,9 @@ class BaseBuffer(ABC):
         return obs
 
     @staticmethod
-    def _normalize_reward(reward: np.ndarray, env: Optional[VecNormalize] = None) -> np.ndarray:
+    def _normalize_reward(
+        reward: np.ndarray, env: Optional[VecNormalize] = None
+    ) -> np.ndarray:
         if env is not None:
             return env.normalize_reward(reward).astype(np.float32)
         return reward
@@ -201,37 +212,58 @@ class RolloutBuffer(BaseBuffer):
         n_envs: int = 1,
     ):
 
-        super(RolloutBuffer, self).__init__(buffer_size, observation_space, action_space, device, n_envs=n_envs)
+        super(RolloutBuffer, self).__init__(
+            buffer_size, observation_space, action_space, device, n_envs=n_envs
+        )
         self.gae_lambda = gae_lambda
         self.gamma = gamma
-        self.observations, self.actions, self.rewards, self.advantages = None, None, None, None
-        self.returns, self.episode_starts, self.values, self.log_probs = None, None, None, None
+        self.observations, self.actions, self.rewards, self.advantages = (
+            None,
+            None,
+            None,
+            None,
+        )
+        self.returns, self.episode_starts, self.values, self.log_probs = (
+            None,
+            None,
+            None,
+            None,
+        )
         self.deltas = None
         self.generator_ready = False
         self.reset()
 
     def reset(self) -> None:
 
-        self.observations = np.zeros((self.buffer_size, self.n_envs) + self.obs_shape, dtype=np.float32)
-        self.actions = np.zeros((self.buffer_size, self.n_envs, self.action_dim), dtype=np.float32)
+        self.observations = np.zeros(
+            (self.buffer_size, self.n_envs) + self.obs_shape, dtype=np.float32
+        )
+        self.actions = np.zeros(
+            (self.buffer_size, self.n_envs, self.action_dim), dtype=np.float32
+        )
         self.labels = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
         self.imputations = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
         self.preds = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
         self.groups = np.zeros((self.buffer_size, self.n_envs, 2), dtype=np.float32)
         self.rewards = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
         self.returns = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
-        self.episode_starts = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
+        self.episode_starts = np.zeros(
+            (self.buffer_size, self.n_envs), dtype=np.float32
+        )
         self.values = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
         self.log_probs = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
         self.advantages = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
         self.deltas = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
         self.delta_deltas = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
-        self.delta_b_terms = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
         self.delta_reals = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
+        self.delta_preds = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
+        self.delta_vars = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
         self.generator_ready = False
         super(RolloutBuffer, self).reset()
 
-    def compute_returns_and_advantage(self, last_values: th.Tensor, dones: np.ndarray) -> None:
+    def compute_returns_and_advantage(
+        self, last_values: th.Tensor, dones: np.ndarray
+    ) -> None:
         """
         Post-processing step: compute the lambda-return (TD(lambda) estimate)
         and GAE(lambda) advantage.
@@ -257,8 +289,14 @@ class RolloutBuffer(BaseBuffer):
             else:
                 next_non_terminal = 1.0 - self.episode_starts[step + 1]
                 next_values = self.values[step + 1]
-            delta = self.rewards[step] + self.gamma * next_values * next_non_terminal - self.values[step]
-            last_gae_lam = delta + self.gamma * self.gae_lambda * next_non_terminal * last_gae_lam
+            delta = (
+                self.rewards[step]
+                + self.gamma * next_values * next_non_terminal
+                - self.values[step]
+            )
+            last_gae_lam = (
+                delta + self.gamma * self.gae_lambda * next_non_terminal * last_gae_lam
+            )
             self.advantages[step] = last_gae_lam
         # TD(lambda) estimator, see Github PR #375 or "Telescoping in TD(lambda)"
         # in David Silver Lecture 4: https://www.youtube.com/watch?v=PnHCvfgC_ZA
@@ -278,8 +316,9 @@ class RolloutBuffer(BaseBuffer):
         log_prob: th.Tensor,
         deltas: th.Tensor,
         delta_deltas: th.Tensor,
-        delta_b_terms: th.Tensor,
         delta_reals: th.Tensor,
+        delta_preds: th.Tensor,
+        delta_vars: th.Tensor,
     ) -> None:
         """
         :param obs: Observation
@@ -312,13 +351,16 @@ class RolloutBuffer(BaseBuffer):
         self.log_probs[self.pos] = log_prob.clone().cpu().numpy()
         self.deltas[self.pos] = deltas.clone().cpu().numpy()
         self.delta_deltas[self.pos] = delta_deltas.clone().cpu().numpy()
-        self.delta_b_terms[self.pos] = delta_b_terms.clone().cpu().numpy()
         self.delta_reals[self.pos] = delta_reals.clone().cpu().numpy()
+        self.delta_preds[self.pos] = delta_preds.clone().cpu().numpy()
+        self.delta_vars[self.pos] = delta_vars.clone().cpu().numpy()
         self.pos += 1
         if self.pos == self.buffer_size:
             self.full = True
 
-    def get(self, batch_size: Optional[int] = None) -> Generator[RolloutBufferSamples, None, None]:
+    def get(
+        self, batch_size: Optional[int] = None
+    ) -> Generator[RolloutBufferSamples, None, None]:
         assert self.full, ""
         indices = np.random.permutation(self.buffer_size * self.n_envs)
         # Prepare the data
@@ -337,8 +379,9 @@ class RolloutBuffer(BaseBuffer):
                 "returns",
                 "deltas",
                 "delta_deltas",
-                "delta_b_terms",
                 "delta_reals",
+                "delta_preds",
+                "delta_vars",
             ]
 
             for tensor in _tensor_names:
@@ -354,7 +397,9 @@ class RolloutBuffer(BaseBuffer):
             yield self._get_samples(indices[start_idx : start_idx + batch_size])
             start_idx += batch_size
 
-    def _get_samples(self, batch_inds: np.ndarray, env: Optional[VecNormalize] = None) -> RolloutBufferSamples:
+    def _get_samples(
+        self, batch_inds: np.ndarray, env: Optional[VecNormalize] = None
+    ) -> RolloutBufferSamples:
         data = (
             self.observations[batch_inds],
             self.actions[batch_inds],
@@ -368,8 +413,9 @@ class RolloutBuffer(BaseBuffer):
             self.returns[batch_inds].flatten(),
             self.deltas[batch_inds].flatten(),
             self.delta_deltas[batch_inds].flatten(),
-            self.delta_b_terms[batch_inds].flatten(),
             self.delta_reals[batch_inds].flatten(),
+            self.delta_preds[batch_inds].flatten(),
+            self.delta_vars[batch_inds].flatten(),
         )
         return RolloutBufferSamples(*tuple(map(self.to_torch, data)))
 
@@ -382,8 +428,10 @@ class ReplayMemory(BaseBuffer):
         action_space: spaces.Space,
         device: Union[th.device, str] = "cpu",
         n_envs: int = 1,
-    ):  
-        super(ReplayMemory, self).__init__(buffer_size, observation_space, action_space, device, n_envs=n_envs)
+    ):
+        super(ReplayMemory, self).__init__(
+            buffer_size, observation_space, action_space, device, n_envs=n_envs
+        )
         self.n_envs = n_envs
         self.observation_space = observation_space
         self.buffer_size = buffer_size
@@ -393,13 +441,10 @@ class ReplayMemory(BaseBuffer):
     def reset(self) -> None:
         self.observations = np.zeros((0,) + self.obs_shape, dtype=np.float32)
         self.labels = np.zeros((0, 1), dtype=np.float32)
-        self.groups = np.zeros((0, 2), dtype=np.float32)
-        self.probs = np.zeros((0, 1), dtype=np.float32)
         self.pos = 0
 
-    def add(self, obs: np.ndarray, label: np.ndarray, group: np.ndarray, prob: np.ndarray) -> None:
-
-        # this function should concatenate the old and the new data, and 
+    def add(self, obs: np.ndarray, label: np.ndarray) -> None:
+        # this function should concatenate the old and the new data, and
         # sample the new data to the original size
 
         if obs.shape[1] == 1:
@@ -407,31 +452,19 @@ class ReplayMemory(BaseBuffer):
 
         self.observations = np.concatenate((self.observations, obs), axis=0)
         self.labels = np.concatenate((self.labels, label), axis=0)
-        self.probs = np.concatenate((self.probs, prob.reshape(-1, 1)), axis=0)
-        self.groups = np.concatenate((self.groups, group.reshape(-1, 2)), axis=0)
 
         if self.observations.shape[0] > self.buffer_size:
-            # sample to return to the original size
-            probs = self.probs.flatten() + 1e-8
-            inverse_probs = 1 / probs
-            # avoid extreme values
-            inverse_probs = np.clip(inverse_probs, 0.2, 0.8)
-            inverse_probs = inverse_probs / np.sum(inverse_probs)
-
-            # sample indices based on the inverse probabilities
             indices = np.random.choice(
                 np.arange(self.observations.shape[0]),
                 size=self.buffer_size,
                 replace=True,
-                # p=inverse_probs,
             )
             self.observations = self.observations[indices]
             self.labels = self.labels[indices]
-            self.groups = self.groups[indices]
-            self.probs = self.probs[indices]
 
-
-    def get(self, batch_size: Optional[int] = None) -> Generator[ReplayMemorySamples, None, None]:
+    def get(
+        self, batch_size: Optional[int] = None
+    ) -> Generator[ReplayMemorySamples, None, None]:
         # Sample random indices
         indices = np.random.permutation(self.observations.shape[0])
         # Prepare the data
@@ -440,11 +473,9 @@ class ReplayMemory(BaseBuffer):
             _tensor_names = [
                 "observations",
                 "labels",
-                "groups",
-                "probs",
             ]
 
-            #for tensor in _tensor_names:
+            # for tensor in _tensor_names:
             #    self.__dict__[tensor] = self.swap_and_flatten(self.__dict__[tensor])
             self.generator_ready = True
 
@@ -457,11 +488,11 @@ class ReplayMemory(BaseBuffer):
             yield self._get_samples(indices[start_idx : start_idx + batch_size])
             start_idx += batch_size
 
-    def _get_samples(self, batch_inds: np.ndarray, env: Optional[VecNormalize] = None) -> ReplayMemorySamples:
+    def _get_samples(
+        self, batch_inds: np.ndarray, env: Optional[VecNormalize] = None
+    ) -> ReplayMemorySamples:
         data = (
             self.observations[batch_inds],
             self.labels[batch_inds],
-            self.groups[batch_inds],
-            self.probs[batch_inds],
         )
         return ReplayMemorySamples(*tuple(map(self.to_torch, data)))
