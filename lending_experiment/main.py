@@ -9,29 +9,29 @@ from pathlib import Path
 import time
 
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+# os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 import numpy as np
 import pandas as pd
 import torch
 from stable_baselines3.common.callbacks import CheckpointCallback
 from stable_baselines3.common.logger import configure
-
-# from stable_baselines3.common.monitor import Monitor
+from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv
 
 import sys
 
 sys.path.append("..")
 
-from lending_experiment.agents.ppo.ppo_wrapper_env import PPOEnvWrapper, Monitor
+from lending_experiment.agents.ppo.ppo_wrapper_env import PPOEnvWrapper
 from lending_experiment.agents.ppo.sb3.ppo import PPO
+from lending_experiment.agents.ppo.sb3.pocar import POCAR
+from lending_experiment.agents.ppo.sb3.rrm import RRM
 
 from lending_experiment.environments.resampling import (
     ResamplingEnv,
     LendingEnv,
     EnemEnv,
-    Params as ResamplingParams,
 )
 import argparse
 
@@ -43,29 +43,28 @@ torch.cuda.empty_cache()
 EXP_DIR = "./experiments"
 
 ALG_PARAMS = {}
-ALG_PARAMS["ppo"] = {"ad_reg": "none", "learning_rate": 1e-5}
+ALG_PARAMS["ppo"] = {"learning_rate": 1e-5}
 ALG_PARAMS["sellf"] = {
-    "ad_reg": "sellf",
     "learning_rate": 1e-5,
     "beta_0": 1,
     "beta_1": 0.5,
     "beta_3": 0.5,
 }
 ALG_PARAMS["pocar_full"] = {
-    "ad_reg": "pocar",
     "learning_rate": 1e-5,
     "beta_0": 1,
     "beta_1": 0.5,
-    "beta_2" : 0.5,
-    "beta_3": 0.,
+    "beta_2": 0.5,
 }
 ALG_PARAMS["pocar"] = {
-    "ad_reg": "pocar",
     "learning_rate": 1e-5,
     "beta_0": 1,
     "beta_1": 0.5,
     "beta_1": 0.5,
-    "beta_3": 0.,
+}
+ALG_PARAMS["rrm"] = {
+    "learning_rate" : 1e-5,
+    "beta_0" : 0.5,
 }
 
 
@@ -77,40 +76,55 @@ def get_env(env_name: str, utility_method: str, algorithm: str) -> ResamplingEnv
     else:
         delta_method = "accepted"
     if env_name == "fico":
-        params = ResamplingParams()
-        env = LendingEnv(
-            params, utility_method=utility_method, delta_method=delta_method
-        )
+        env = LendingEnv(utility_method=utility_method, delta_method=delta_method)
     elif env_name == "enem":
-        params = ResamplingParams()
-        params.num_features = 130
-        env = EnemEnv()
+        env = EnemEnv(
+            n_features=130, utility_method=utility_method, delta_method=delta_method
+        )
     return env
 
 
-def train(train_timesteps, env, save_dir, config):
+def get_alg(env, config, device):
+    if config["algorithm"] == "ppo":
+        model = PPO(
+            env=env,
+            policy_kwargs={
+                "use_predictor": config["use_predictor"],
+            },
+            device=device,
+            **config["algorithm_params"],
+        )
+    elif config["algorithm"] == "pocar" or config["algorithm"] == "pocar_full":
+        model = POCAR(
+            env=env,
+            policy_kwargs={
+                "use_predictor": config["use_predictor"],
+            },
+            omega=config["omega"],
+            device=device,
+            **config["algorithm_params"],
+        )
+    elif config["algorithm"] == "rrm":
+        model = RRM(
+            env=env,
+            policy_kwargs={
+                "use_predictor": config["use_predictor"],
+            },
+            omega=config["omega"],
+            device=device,
+            **config["algorithm_params"],
+        )
 
-    # print("env_params: ", env.state.params)
+    return model
+
+
+def train(train_timesteps, env, save_dir, config):
 
     env = PPOEnvWrapper(env=env)
     env = Monitor(env)
     env = DummyVecEnv([lambda: env])
 
-    use_predictor = config["algorithm"] == "sellf"
-
-    model = PPO(
-        "MlpPolicy",
-        env,
-        policy_kwargs={
-            "use_predictor": use_predictor,
-            "activation_fn": torch.nn.ReLU,
-            "net_arch": [256, 256, dict(vf=[256, 128], pi=[256, 128])],
-        },
-        verbose=0,
-        omega=config["omega"],
-        device=device,
-        **config["algorithm_params"],
-    )
+    model = get_alg(env, config, device)
     env.env_method("set_agent", model)
 
     shutil.rmtree(save_dir, ignore_errors=True)
@@ -121,7 +135,7 @@ def train(train_timesteps, env, save_dir, config):
     )
 
     model.set_logger(configure(folder=save_dir))
-    model.learn(total_timesteps=train_timesteps, callback=checkpoint_callback)
+    model.learn(total_timesteps=train_timesteps)  # , callback=checkpoint_callback)
     model.save(save_dir + "/final_model")
 
     # Once we finish learning, plot the returns over time and save into the experiments directory
@@ -136,23 +150,7 @@ def evaluate(env, agent, seeds, eval_dir):
         np.random.seed(seeds[ep])
         torch.manual_seed(seeds[ep])
 
-        # Make predictions for everyone
-        action_list = []
-        pred_list = []
-        acc = []
-        for idx in range(env.num_applicants):
-            obs = env.get_applicant_obs(idx)
-            obs = np.array(obs).reshape(1, -1)
-            obs = torch.tensor(obs, dtype=torch.float32).to(device)
-            action = agent.policy.get_action(obs)[0]
-            pred = agent.policy.get_label(obs).item()
-            action_list.append(action)
-            pred_list.append(pred)
-            label = env.pool[idx]["label"]
-            acc.append(int(label == pred))
-        print(f"Mean accuracy: {np.mean(acc)}")
-
-        env.set_action_pred(action_list, pred_list)
+        env.update_models()
 
         obs = env.reset()
         done = False
@@ -160,20 +158,17 @@ def evaluate(env, agent, seeds, eval_dir):
         while not done:
             obs = np.array(obs).reshape(1, -1)
             obs = torch.tensor(obs, dtype=torch.float32).to(device)
-            action = None
-            if isinstance(agent, PPO):
-                action = agent.policy.get_action(obs)[0]
-            else:
-                action = agent.act(obs, done)
+            action = agent.policy.get_action(obs)
             action = action.item()
             pred = agent.policy.get_label(obs).item()
 
+            applicant = env.pool[env.idx]
             # Logging
-            group_id = np.argmax(env.state.group)
+            group_id = np.argmax(applicant["group"])
             # Add to loans if the agent wants to loan
-            label = env.state.label
+            label = applicant["label"]
             obs, _, done, _ = env.step(action)
-            resource = env.state.resource
+            resource = env.resource
             eval_data.append(
                 {
                     "ep": ep,
@@ -184,8 +179,8 @@ def evaluate(env, agent, seeds, eval_dir):
                     "pred": pred,
                     "correct": int(label == pred),
                     "resource": resource,
-                    "delta": env.state.delta,
-                    "delta_real": env.state.delta_real,
+                    "delta": env.delta,
+                    "delta_real": env.delta_real,
                 }
             )
             t += 1
@@ -212,6 +207,7 @@ def main(config):
     )
     save_dir = f"{exp_dir}/models"
     eval_dir = f"{exp_dir}/eval"
+    config["use_predictor"] = config["algorithm"] == "sellf"
     env = get_env(config["env_name"], config["mu_type"], config["algorithm"])
     train(
         train_timesteps=config["train_timesteps"],
@@ -231,10 +227,11 @@ def main(config):
     with open(eval_dir + "/seeds.txt", "w") as f:
         f.write(str(seeds))
 
-    model_path = f"{save_dir}/final_model.zip"
-    agent = PPO.load(model_path, verbose=1, device=device)
+    model_path = f"{save_dir}/final_model"
     env = get_env(config["env_name"], config["mu_type"], config["algorithm"])
     env = PPOEnvWrapper(env)
+    agent = get_alg(env, config, device)
+    agent.load(model_path)
     env.set_agent(agent)
 
     evaluate(
@@ -259,7 +256,7 @@ if __name__ == "__main__":
     args.add_argument("--mu_type", type=str, default="accuracy")
     args = args.parse_args()
 
-    train_timesteps = 1_000
+    train_timesteps = 500_000
     config = {
         "exp_name": args.algorithm,
         "env_name": args.env_name,
