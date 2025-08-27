@@ -25,6 +25,7 @@ class PPOEnvWrapper(gym.Wrapper):
         self.num_applicants = len(self.env.pool)
         self.env.get_label_pred = self._get_label_pred
         self.env.get_action = self._get_action
+        self.env.get_action_prob = self._get_action_prob
 
     def set_agent(self, agent):
         self.policy = agent.policy
@@ -53,6 +54,19 @@ class PPOEnvWrapper(gym.Wrapper):
         obs = torch.tensor(obs, dtype=torch.float32).to(self.policy.device)
         with torch.no_grad():
             pred = self.policy.get_action(obs).cpu().numpy()[0]
+        return pred
+    
+    def _get_action_prob(self, idx):
+        applicant = self.env.pool[idx]
+        obs = {
+            "applicant_features": applicant["features"],
+            "group": applicant["group"],
+        }
+        obs = self.process_observation(obs)
+        obs = np.array(obs).reshape(1, -1)
+        obs = torch.tensor(obs, dtype=torch.float32).to(self.policy.device)
+        with torch.no_grad():
+            pred = self.policy.get_action_prob(obs).cpu().numpy()[0]
         return pred
 
     def get_applicant_obs(self, idx):

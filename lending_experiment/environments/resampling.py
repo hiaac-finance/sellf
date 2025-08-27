@@ -37,6 +37,7 @@ class ResamplingEnv(gym.Env):
         self.get_label = lambda x: 0
         self.get_action = lambda x: 0
         self.get_label_pred = lambda x: 0
+        self.get_action_prob = lambda x: 0.5
 
         resource_space = spaces.Box(
             low=0.0,
@@ -55,39 +56,22 @@ class ResamplingEnv(gym.Env):
             "group": group_space,
         }
         self.observation_space = spaces.Dict(self.observable_state_vars)
-
-        self.init_utility_matrix = np.zeros(
-            (self.n_applicants, self.n_groups), dtype=np.float32
+        self.init_data = dict(
+            [
+                (col, np.zeros((self.n_applicants, self.n_groups), dtype=np.float32))
+                for col in [
+                    "utility_real",
+                    "active_real",
+                    "utility",
+                    "active",
+                    "action",
+                    "action_prob",
+                    "pred",
+                    "error",
+                ]
+            ]
         )
-        self.init_active_matrix = np.zeros(
-            (self.n_applicants, self.n_groups), dtype=np.float32
-        )
-        self.init_action_matrix = np.zeros(
-            (self.n_applicants, self.n_groups),
-            dtype=np.float32,
-        )
-        self.utility_matrix = np.zeros(
-            (self.n_applicants, self.n_groups), dtype=np.float32
-        )
-        self.active_matrix = np.zeros(
-            (self.n_applicants, self.n_groups), dtype=np.float32
-        )
-        self.action_matrix = np.zeros(
-            (self.n_applicants, self.n_groups),
-            dtype=np.float32,
-        )
-        self.init_utility_real_matrix = np.zeros(
-            (self.n_applicants, self.n_groups), dtype=np.float32
-        )
-        self.init_active_real_matrix = np.zeros(
-            (self.n_applicants, self.n_groups), dtype=np.float32
-        )
-        self.utility_real_matrix = np.zeros(
-            (self.n_applicants, self.n_groups), dtype=np.float32
-        )
-        self.active_real_matrix = np.zeros(
-            (self.n_applicants, self.n_groups), dtype=np.float32
-        )
+        self.data = copy.deepcopy(self.init_data)
         self.init_pool = []
         self.pool = []
         self.load_pool()
@@ -98,17 +82,15 @@ class ResamplingEnv(gym.Env):
         self.delta = 0
         self.delta_real = 0
         self.delta_delta = 0
+        self.delta_pred = 0
+        self.delta_var = 0
         self.sample_applicant()
 
     def reset(self):
         """Resets the environment."""
         self.timestep = 0
         self.pool = copy.deepcopy(self.init_pool)
-        self.utility_matrix = copy.deepcopy(self.init_utility_matrix)
-        self.active_matrix = copy.deepcopy(self.init_active_matrix)
-        self.action_matrix = copy.deepcopy(self.init_action_matrix)
-        self.utility_real_matrix = copy.deepcopy(self.init_utility_real_matrix)
-        self.active_real_matrix = copy.deepcopy(self.init_active_real_matrix)
+        self.data = copy.deepcopy(self.init_data)
         self._state_init()
         self.compute_disparity()
         return self._get_observable_state()
@@ -174,16 +156,22 @@ class ResamplingEnv(gym.Env):
             active = 1 if label == 1 else 0
 
         if init:
-            self.init_utility_real_matrix[idx, group_idx] = utility_value
-            self.init_active_real_matrix[idx, group_idx] = active
-            self.init_action_matrix[idx, group_idx] = action
+            self.init_data["utility_real"][idx, group_idx] = utility_value
+            self.init_data["active_real"][idx, group_idx] = active
+            self.init_data["action"][idx, group_idx] = action
+            self.init_data["action_prob"][idx, group_idx] = self.get_action_prob(idx)
+            self.init_data["error"][idx, group_idx] = pred - label
+            self.init_data["pred"][idx, group_idx] = pred
         else:
-            self.utility_real_matrix[idx, group_idx] = utility_value
-            self.active_real_matrix[idx, group_idx] = active
-            self.action_matrix[idx, group_idx] = action
+            self.data["utility_real"][idx, group_idx] = utility_value
+            self.data["active_real"][idx, group_idx] = active
+            self.data["action"][idx, group_idx] = action
+            self.data["action_prob"][idx, group_idx] = self.get_action_prob(idx)
+            self.data["error"][idx, group_idx] = pred - label
+            self.data["pred"][idx, group_idx] = pred
 
         if self.delta_method == "full":
-            pass  # Full delta is already calculated in the utility_real_matrix
+            pass  # Full delta is already calculated
         elif self.delta_method == "imputation":
             label = label if action == 1 else pred
             if self.utility_method == "accuracy":
@@ -208,60 +196,112 @@ class ResamplingEnv(gym.Env):
                 active = 1 if action * label == 1 else 0
 
         if init:
-            self.init_utility_matrix[idx, group_idx] = utility_value
-            self.init_active_matrix[idx, group_idx] = active
+            self.init_data["utility"][idx, group_idx] = utility_value
+            self.init_data["active"][idx, group_idx] = active
         else:
-            self.utility_matrix[idx, group_idx] = utility_value
-            self.active_matrix[idx, group_idx] = active
+            self.data["utility"][idx, group_idx] = utility_value
+            self.data["active"][idx, group_idx] = active
 
     def compute_disparity(self):
-        # Multiplity utility by active matrix
-        self.utility_matrix *= self.active_matrix
-        self.utility_real_matrix *= self.active_real_matrix
+        # calculate disparity using self.data
+        # multiply utility by active
+        self.data["utility_real"] *= self.data["active_real"]
+        self.data["utility"] *= self.data["active"]
 
-        # First, calculate real utility
-        cur_util = np.sum(self.utility_real_matrix, axis=0)
-        group_counts = np.sum(self.active_real_matrix, axis=0)
-        cur_util = np.divide(
-            cur_util,
-            group_counts,
-            out=np.zeros_like(cur_util),
-            where=group_counts != 0,
+        # calculate group counts from active
+        group_counts_real = np.sum(self.data["active_real"], axis=0)
+        group_counts = np.sum(self.data["active"], axis=0)
+
+        # calculate utility
+        utility_real = np.sum(self.data["utility_real"], axis=0)
+        utility = np.sum(self.data["utility"], axis=0)
+
+        utility_real = np.true_divide(
+            utility_real,
+            group_counts_real,
+            where=group_counts_real != 0,
+            out=np.zeros_like(utility_real),
         )
-        self.delta_real = np.max(cur_util) - np.min(cur_util)
-
-        accept_rate = np.sum(self.action_matrix, axis=0)
-        accept_rate = np.divide(
-            accept_rate,
-            group_counts,
-            out=np.zeros_like(accept_rate),
-            where=group_counts != 0,
+        utility = np.true_divide(
+            utility, group_counts, where=group_counts != 0, out=np.zeros_like(utility)
         )
 
-        # Then, calculate utility
-        cur_util = np.sum(self.utility_matrix, axis=0)
-        group_counts = np.sum(self.active_matrix, axis=0)
         cur_delta = self.delta
-        cur_util = np.divide(
-            cur_util,
-            group_counts,
-            out=np.zeros_like(cur_util),
-            where=group_counts != 0,
-        )
-        self.delta = np.max(cur_util) - np.min(cur_util)
+        self.delta_real = np.max(utility_real) - np.min(utility_real)
+        self.delta = np.max(utility) - np.min(utility)
         self.delta_delta = self.delta - cur_delta
 
-        #for i in range(2):
-        #   #self.error_on_accept[i] = ...
-        #   a = accept_rate[i]
-        #   r = 1 - a
-        #   if self.utility_method in ["qualification", "accuracy"]:
-        #       self.pred_error = r * (
-        #           self.error_on_accept[i] + np.sqrt(a - a**2) / (a * r)
-        #       )
-        #   else:
-        #       raise Exception("not implemented yet")
-        #self.delta_pred = np.max(self.pred_error) - np.min(self.pred_error)
+        # calculate accept rate
+        accept = np.sum(self.data["action"], axis=0)
+        accept_rate = np.true_divide(
+            accept,
+            group_counts_real,
+            where=group_counts_real != 0,
+            out=np.zeros_like(accept),
+        )
+
+        # calculate error on accepted
+        error = self.data["error"] * self.data["action"]
+        error = np.sum(error, axis=0)
+        error_rate = np.true_divide(
+            error,
+            accept,
+            where=accept != 0,
+            out=np.zeros_like(error),
+        )
+
+        # calculate variance ignoring rows with value 0
+        action_var = [
+            np.var(self.data["action_prob"][:, i][self.data["action_prob"][:, i] != 0])
+            for i in range(2)
+        ]
+
+        # TEST: replacing variance 
+
+        pred_mean = np.sum(self.data["pred"], axis=0)
+        pred_mean = np.true_divide(
+            pred_mean,
+            group_counts_real,
+            where=group_counts_real != 0,
+            out=np.zeros_like(pred_mean),
+        )
+
+        delta_pred = [0, 0]
+        prob_dist = [0, 0]
+        for i in range(2):
+            a = accept_rate[i]
+            prob_dist[i] = np.sqrt(action_var[i]) / (a * (1 - a))
+            error_bound = error_rate[i] + prob_dist[i]
+
+            #print("group:", i)
+            #print(f"error: {error_rate[i]:.2f}, dist: {np.sqrt(action_var[i]) / (a * (1 - a)):.2f}")
+            #print("")
+            if self.utility_method in ["qualification", "accuracy"]:
+                delta_pred[i] = error_bound * (1 - a)
+            else:
+                delta_pred[i] = error_bound * (1 - a) / pred_mean[i]
+
+        self.delta_pred = np.max(delta_pred) - np.min(delta_pred)
+        #print(f"delta_pred: {self.delta_pred:.2f}")
+
+
+        var_gap = [0, 0]
+        for i in range(2):
+            if self.utility_method in ["qualification", "accuracy"]:
+                var_gap[i] = np.sqrt(action_var[i]) / accept_rate[i]
+            else:
+                var_gap[i] = np.sqrt(action_var[i]) / (accept_rate[i] * pred_mean[i])
+
+        # get group with highest rejection        
+        i = np.argmax(1 - accept_rate)
+        j = 1 - i
+
+        self.delta_var = var_gap[i] - var_gap[j]
+
+        self.error_rate = error_rate
+        self.prob_dist = prob_dist
+        self.var_gap = var_gap
+
 
     def sample_applicant(self):
         selected = np.random.choice(len(self.pool), size=1)[0]
@@ -269,10 +309,8 @@ class ResamplingEnv(gym.Env):
         return
 
     def update_models(self):
-        self.init_active_matrix *= 0
-        self.init_utility_matrix *= 0
-        self.init_active_real_matrix *= 0
-        self.init_utility_real_matrix *= 0
+        for k, v in self.init_data.items():
+            self.init_data[k] = np.zeros_like(v)
         for idx in range(len(self.pool)):
             action = self.get_action(idx)
             pred = self.get_label_pred(idx)
@@ -281,10 +319,7 @@ class ResamplingEnv(gym.Env):
             self.pool[idx]["pred"] = pred
             self.update_utility(idx, label, pred, group_idx, action, init=True)
 
-        self.utility_matrix = copy.deepcopy(self.init_utility_matrix)
-        self.active_matrix = copy.deepcopy(self.init_active_matrix)
-        self.utility_real_matrix = copy.deepcopy(self.init_utility_real_matrix)
-        self.active_real_matrix = copy.deepcopy(self.init_active_real_matrix)
+        self.data = self.init_data.copy()
 
         self.compute_disparity()
 
@@ -318,13 +353,15 @@ class LendingEnv(ResamplingEnv):
             features[x] = 1
             group = np.zeros(num_groups, dtype=np.float32)
             group[g] = 1
-
+            pred = self.get_label_pred(i)
+            action = self.get_action(i)
             self.init_pool.append(
                 {
                     "features": features,
                     "group": group,
                     "label": y,
-                    "pred": None,
+                    "pred" : pred,
+                    "action" : action,
                 }
             )
 
