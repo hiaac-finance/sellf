@@ -4,204 +4,87 @@ from typing import Any, Dict, Optional, Type, Union
 import numpy as np
 import torch
 import torch as th
+import gym
 from gym import spaces
 from torch.nn import functional as F
+import time
 
-from stable_baselines3.common.policies import ActorCriticPolicy
-from stable_baselines3.common.type_aliases import GymEnv, MaybeCallback, Schedule
-from stable_baselines3.common.utils import explained_variance, get_schedule_fn
+from stable_baselines3.common.vec_env import VecEnv
+from stable_baselines3.common.utils import explained_variance
 
 
 from lending_experiment.agents.ppo.sb3.on_policy_algorithm import OnPolicyAlgorithm
 
 
 class RRM(OnPolicyAlgorithm):
-    """
-    Proximal Policy Optimization algorithm (PPO) (clip version)
-    Paper: https://arxiv.org/abs/1707.06347
-    Code: This implementation borrows code from OpenAI Spinning Up (https://github.com/openai/spinningup/)
-    https://github.com/ikostrikov/pytorch-a2c-ppo-acktr-gail and
-    and Stable Baselines (PPO2 from https://github.com/hill-a/stable-baselines)
-    Introduction to PPO: https://spinningup.openai.com/en/latest/algorithms/ppo.html
-    :param policy: The policy model to use (MlpPolicy, CnnPolicy, ...)
-    :param env: The environment to learn from (if registered in Gym, can be str)
-    :param learning_rate: The learning rate, it can be a function
-        of the current progress remaining (from 1 to 0)
-    :param n_steps: The number of steps to run for each environment per update
-        (i.e. rollout buffer size is n_steps * n_envs where n_envs is number of environment copies running in parallel)
-        NOTE: n_steps * n_envs must be greater than 1 (because of the advantage normalization)
-        See https://github.com/pytorch/pytorch/issues/29372
-    :param batch_size: Minibatch size
-    :param n_epochs: Number of epoch when optimizing the surrogate loss
-    :param gamma: Discount factor
-    :param gae_lambda: Factor for trade-off of bias vs variance for Generalized Advantage Estimator
-    :param clip_range: Clipping parameter, it can be a function of the current progress
-        remaining (from 1 to 0).
-    :param clip_range_vf: Clipping parameter for the value function,
-        it can be a function of the current progress remaining (from 1 to 0).
-        This is a parameter specific to the OpenAI implementation. If None is passed (default),
-        no clipping will be done on the value function.
-        IMPORTANT: this clipping depends on the reward scaling.
-    :param normalize_advantage: Whether to normalize or not the advantage
-    :param ent_coef: Entropy coefficient for the loss calculation
-    :param vf_coef: Value function coefficient for the loss calculation
-    :param max_grad_norm: The maximum value for the gradient clipping
-    :param use_sde: Whether to use generalized State Dependent Exploration (gSDE)
-        instead of action noise exploration (default: False)
-    :param sde_sample_freq: Sample a new noise matrix every n steps when using gSDE
-        Default: -1 (only sample at the beginning of the rollout)
-    :param target_kl: Limit the KL divergence between updates,
-        because the clipping is not enough to prevent large update
-        see issue #213 (cf https://github.com/hill-a/stable-baselines/issues/213)
-        By default, there is no limit on the kl div.
-    :param tensorboard_log: the log location for tensorboard (if None, no logging)
-    :param create_eval_env: Whether to create a second environment that will be
-        used for evaluating the agent periodically. (Only available when passing string for the environment)
-    :param policy_kwargs: additional arguments to be passed to the policy on creation
-    :param verbose: the verbosity level: 0 no output, 1 info, 2 debug
-    :param seed: Seed for the pseudo random generators
-    :param device: Device (cpu, cuda, ...) on which the code should be run.
-        Setting it to auto, the code will be run on the GPU if possible.
-    :param _init_setup_model: Whether or not to build the network at the creation of the instance
-    """
-
     def __init__(
-            self,
-            policy: Union[str, Type[ActorCriticPolicy]],
-            env: Union[GymEnv, str],
-            learning_rate: Union[float, Schedule] = 3e-4,
-            ad_reg: str = "pocar",
-            beta_0: float = 1.0,
-            beta_1: float = 0.25,
-            beta_2: float = 0.,
-            omega: float = 0.005,
-            n_steps: int = 2048,
-            batch_size: int = 64,
-            n_epochs: int = 10,
-            gamma: float = 0.99,
-            gae_lambda: float = 0.95,
-            clip_range: Union[float, Schedule] = 0.2,
-            clip_range_vf: Union[None, float, Schedule] = None,
-            normalize_advantage: bool = True,
-            ent_coef: float = 0.0,
-            vf_coef: float = 0.5,
-            max_grad_norm: float = 0.5,
-            use_sde: bool = False,
-            sde_sample_freq: int = -1,
-            target_kl: Optional[float] = None,
-            tensorboard_log: Optional[str] = None,
-            create_eval_env: bool = False,
-            policy_kwargs: Optional[Dict[str, Any]] = None,
-            verbose: int = 0,
-            seed: Optional[int] = None,
-            device: Union[th.device, str] = "auto",
-            _init_setup_model: bool = True,
-            **kwargs: Any,
+        self,
+        env: Union[gym.Env, VecEnv],
+        learning_rate: float = 3e-4,
+        n_steps: int = 2048,
+        batch_size: int = 64,
+        n_epochs: int = 10,
+        beta_0: float = 0.5,
+        omega: float = 0.1,
+        policy_kwargs: Optional[Dict[str, Any]] = None,
+        seed: Optional[int] = None,
+        device: Union[th.device, str] = "auto",
     ):
 
-        super(PPO, self).__init__(
-            policy,
-            env,
+        super(RRM, self).__init__(
+            env=env,
             learning_rate=learning_rate,
             n_steps=n_steps,
-            gamma=gamma,
-            gae_lambda=gae_lambda,
-            ent_coef=ent_coef,
-            vf_coef=vf_coef,
-            max_grad_norm=max_grad_norm,
-            use_sde=use_sde,
-            sde_sample_freq=sde_sample_freq,
-            tensorboard_log=tensorboard_log,
             policy_kwargs=policy_kwargs,
-            verbose=verbose,
             device=device,
-            create_eval_env=create_eval_env,
             seed=seed,
-            _init_setup_model=False,
-            supported_action_spaces=(
-                spaces.Box,
-                spaces.Discrete,
-                spaces.MultiDiscrete,
-                spaces.MultiBinary,
-            ),
         )
 
-        # Sanity check, otherwise it will lead to noisy gradient and NaN
-        # because of the advantage normalization
-        if normalize_advantage:
-            assert (
-                    batch_size > 1
-            ), "`batch_size` must be greater than 1. See https://github.com/DLR-RM/stable-baselines3/issues/440"
+        if hasattr(env, "utility_method"):
+            self.utility_method = env.utility_method
+        else:
+            self.utility_method = env.get_attr("utility_method")[0]
 
-        if self.env is not None:
-            # Check that `n_steps * n_envs > 1` to avoid NaN
-            # when doing advantage normalization
-            buffer_size = self.env.num_envs * self.n_steps
-            assert (
-                    buffer_size > 1
-            ), f"`n_steps * n_envs` must be greater than 1. Currently n_steps={self.n_steps} and n_envs={self.env.num_envs}"
-            # Check that the rollout buffer size is a multiple of the mini-batch size
-            untruncated_batches = buffer_size // batch_size
-            if buffer_size % batch_size > 0:
-                warnings.warn(
-                    f"You have specified a mini-batch size of {batch_size},"
-                    f" but because the `RolloutBuffer` is of size `n_steps * n_envs = {buffer_size}`,"
-                    f" after every {untruncated_batches} untruncated mini-batches,"
-                    f" there will be a truncated mini-batch of size {buffer_size % batch_size}\n"
-                    f"We recommend using a `batch_size` that is a factor of `n_steps * n_envs`.\n"
-                    f"Info: (n_steps={self.n_steps} and n_envs={self.env.num_envs})"
-                )
-        self.ad_reg = ad_reg
-        self.beta_0 = beta_0
-        self.beta_1 = beta_1
-        self.beta_2 = beta_2
-        self.omega = omega
         self.batch_size = batch_size
         self.n_epochs = n_epochs
-        self.clip_range = clip_range
-        self.clip_range_vf = clip_range_vf
-        self.normalize_advantage = normalize_advantage
-        self.target_kl = target_kl
+        self.beta_0 = beta_0
 
-        if _init_setup_model:
-            self._setup_model()
+        self._setup_model()
 
-    def _setup_model(self) -> None:
-        super(PPO, self)._setup_model()
+    def compute_fair_penalization(
+        self, loss: th. Tensor, labels: th.Tensor, groups: th.Tensor
+    ) -> th.Tensor:
+        g0_idx = (groups[:, 0] == 1).nonzero()
+        g1_idx = (groups[:, 1] == 1).nonzero()
+        g0_loss = loss[g0_idx]
+        g1_loss = loss[g1_idx]
 
-        # Initialize schedules for policy/value clipping
-        self.clip_range = get_schedule_fn(self.clip_range)
-        if self.clip_range_vf is not None:
-            if isinstance(self.clip_range_vf, (float, int)):
-                assert self.clip_range_vf > 0, "`clip_range_vf` must be positive, " "pass `None` to deactivate vf clipping"
-
-            self.clip_range_vf = get_schedule_fn(self.clip_range_vf)
+        if g0_idx.shape[0] == 0 or g1_idx.shape[0] == 0:
+            delta = torch.Tensor([0.0]).to(loss.device)
+        elif self.utility_method == "qualification":
+            delta = torch.Tensor([0.0]).to(loss.device)
+        elif self.utility_method == "accuracy":
+            delta = (g0_loss.mean() - g1_loss.mean()) ** 2
+        elif self.utility_method == "tpr":
+            g0_loss = g0_loss[labels[g0_idx] == 1]
+            g1_loss = g1_loss[labels[g1_idx] == 1]
+            if g0_loss.shape[0] == 0 or g1_loss.shape[0] == 0:
+                delta = torch.Tensor([0.0]).to(loss.device)
+            else:
+                delta = (g0_loss.mean() - g1_loss.mean()) ** 2
+        return delta
 
     def train(self) -> None:
         """
         Update policy using the currently gathered rollout buffer.
         """
         # Switch to train mode (this affects batch norm / dropout)
-        self.policy.set_training_mode(True)
-        # Update optimizer learning rate
-        self._update_learning_rate(self.policy.optimizer)
-        # Compute current clip range
-        clip_range = self.clip_range(self._current_progress_remaining)
-        # Optional: clip range for the value function
-        if self.clip_range_vf is not None:
-            clip_range_vf = self.clip_range_vf(self._current_progress_remaining)
-
-        pred_criterion = th.nn.BCELoss(reduction="none")
-        entropy_losses = []
-        pg_losses, value_losses = [], []
-        clip_fractions = []
-        pred_losses, pred_losses_g0, pred_losses_g1 = [], [], []
-
-        continue_training = True
+        self.policy.train()
+        criterion = torch.nn.BCELoss(reduction = "none")
+        pred_losses = []
 
         # train for n_epochs epochs
         for epoch in range(self.n_epochs):
-            approx_kl_divs = []
             # Do a complete pass on the rollout buffer
             for rollout_data in self.rollout_buffer.get(self.batch_size):
                 actions = rollout_data.actions
@@ -209,80 +92,56 @@ class RRM(OnPolicyAlgorithm):
                     # Convert discrete action from float to long
                     actions = rollout_data.actions.long().flatten()
 
-                # Re-sample the noise matrix because the log_std has changed
-                if self.use_sde:
-                    self.policy.reset_noise(self.batch_size)
+                labels = rollout_data.labels.reshape(-1)
+                probs = self.policy.get_action_prob(rollout_data.observations)
 
-                values, log_prob, entropy = self.policy.evaluate_actions(rollout_data.observations, actions)
-                pred_loss = pred_criterion(probs, rollout_data.labels)
+                # calculate loss on accepted population
+                labels = labels[actions == 1]
+                probs = probs[actions == 1]
+                groups = rollout_data.groups[actions == 1]
 
-                with th.no_grad():
-                    g0_idx = ((rollout_data.groups[:, 0] == 1) & (actions == 1)).nonzero()
-                    g1_idx = ((rollout_data.groups[:, 1] == 1) & (actions == 1)).nonzero()
-                    action_idx = (actions == 1).nonzero()
-                    pred_losses_g0.append(pred_loss[g0_idx].mean().item())
-                    pred_losses_g1.append(pred_loss[g1_idx].mean().item())
-                    pred_losses.append(pred_loss[action_idx].mean().item())
-                pred_loss = pred_loss[action_idx].mean() # TODO VERIFY THIS LINE
-                pred_loss = pred_loss.mean()
-                loss = pred_loss
+                loss = criterion(probs, labels)
 
+                fairness_cost = self.compute_fair_penalization(
+                    loss, labels, groups
+                )
+                loss = loss.mean() + self.beta_0 * fairness_cost
 
-                # Optimization step
                 self.policy.optimizer.zero_grad()
                 loss.backward()
-                # Clip grad norm
-                th.nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
                 self.policy.optimizer.step()
 
-            if not continue_training:
-                break
-
-        self._n_updates += self.n_epochs
-        explained_var = explained_variance(self.rollout_buffer.values.flatten(), self.rollout_buffer.returns.flatten())
+                pred_losses.append(loss.item())
 
         # Logs
-        self.logger.record("train/entropy_loss", np.mean(entropy_losses))
-        self.logger.record("train/policy_gradient_loss", np.mean(pg_losses))
-        self.logger.record("train/value_loss", np.mean(value_losses))
-        self.logger.record("train/approx_kl", np.mean(approx_kl_divs))
-        self.logger.record("train/clip_fraction", np.mean(clip_fractions))
-        self.logger.record("train/loss", loss.item())
-        self.logger.record("train/explained_variance", explained_var)
-        self.logger.record("train/pred_loss", np.mean(pred_losses))
-        self.logger.record("train/pred_loss_g0", np.mean(pred_losses_g0))
-        self.logger.record("train/pred_loss_g1", np.mean(pred_losses_g1))
-        self.logger.record("train/accept_rate", np.mean(self.rollout_buffer.actions.flatten()))
-        self.logger.record("train/pos_rate", np.mean(self.rollout_buffer.labels.flatten()))
-        if hasattr(self.policy, "log_std"):
-            self.logger.record("train/std", th.exp(self.policy.log_std).mean().item())
-
-        self.logger.record("train/n_updates", self._n_updates, exclude="tensorboard")
-        self.logger.record("train/clip_range", clip_range)
-        if self.clip_range_vf is not None:
-            self.logger.record("train/clip_range_vf", clip_range_vf)
-
-    def learn(
-            self,
-            total_timesteps: int,
-            callback: MaybeCallback = None,
-            log_interval: int = 1,
-            eval_env: Optional[GymEnv] = None,
-            eval_freq: int = -1,
-            n_eval_episodes: int = 5,
-            tb_log_name: str = "PPO",
-            eval_log_path: Optional[str] = None,
-            reset_num_timesteps: bool = True,
-    ) -> "PPO":
-
-        return super(PPO, self).learn(
-            total_timesteps=total_timesteps,
-            callback=callback,
-            log_interval=log_interval,
-            eval_env=eval_env,
-            eval_freq=eval_freq,
-            n_eval_episodes=n_eval_episodes,
-            tb_log_name=tb_log_name,
-            eval_log_path=eval_log_path,
-            reset_num_timesteps=reset_num_timesteps,
+        self.logger.record("train/loss", np.mean(pred_losses))
+        self.logger.record(
+            "train/accept_rate", np.mean(self.rollout_buffer.actions.flatten())
         )
+        self.logger.record(
+            "train/pos_rate", np.mean(self.rollout_buffer.labels.flatten())
+        )
+        self.logger.record("train/reward", self.rollout_buffer.rewards.mean().item())
+
+        # Logs some group-dependent variables
+        g0_idx = (self.rollout_buffer.groups[:, 0] == 1).nonzero()
+        g1_idx = (self.rollout_buffer.groups[:, 1] == 1).nonzero()
+
+        accept_rate = [
+            self.rollout_buffer.actions[g0_idx, 0].mean().item(),
+            self.rollout_buffer.actions[g1_idx, 0].mean().item(),
+        ]
+
+        accuracy = (
+            (self.rollout_buffer.labels[:, 0] == self.rollout_buffer.preds[:, 0])
+            .mean()
+            .item()
+        )
+
+        self.logger.record("train/accept_g0", accept_rate[0])
+        self.logger.record("train/accept_g1", accept_rate[1])
+        self.logger.record("train/delta", self.rollout_buffer.deltas.mean().item())
+        self.logger.record(
+            "train/delta_real", self.rollout_buffer.delta_reals.mean().item()
+        )
+        self.logger.record("train/accuracy", accuracy)
