@@ -9,7 +9,7 @@ import torch as th
 from stable_baselines3.common.utils import obs_as_tensor
 from stable_baselines3.common.vec_env import VecEnv
 
-from agents.ppo.sb3.buffers import RolloutBuffer, ReplayMemory
+from agents.buffers import RolloutBuffer, ReplayMemory
 from lending_experiment.agents.policy import Agent
 from stable_baselines3.common.logger import Logger
 
@@ -158,10 +158,9 @@ class OnPolicyAlgorithm:
 
             delta = torch.tensor(np.array([env.get_attr("delta")[0]])).float()
             delta_delta = torch.tensor(np.array([env.get_attr("delta_delta")[0]])).float()
-            # delta_b_term = torch.tensor(np.array(env.get_attr('delta_b_term')))
-            # delta_real = torch.tensor(np.array(env.get_attr('delta_real')))
-            delta_b_term = torch.tensor(np.array([0])).float()
             delta_real = torch.tensor(np.array([env.get_attr("delta_real")])).float()
+            delta_pred = torch.tensor(np.array([env.get_attr("delta_pred")])).float()
+            delta_var = torch.tensor(np.array([env.get_attr("delta_var")])).float()
             rollout_buffer.add(
                 self._last_obs,
                 actions,
@@ -175,8 +174,9 @@ class OnPolicyAlgorithm:
                 log_probs,
                 delta,
                 delta_delta,
-                delta_b_term,
                 delta_real,
+                delta_pred,
+                delta_var,
             )
             self._last_obs = new_obs
             self._last_episode_starts = dones

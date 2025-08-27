@@ -23,10 +23,11 @@ import sys
 
 sys.path.append("..")
 
-from lending_experiment.agents.ppo.ppo_wrapper_env import PPOEnvWrapper
-from lending_experiment.agents.ppo.sb3.ppo import PPO
-from lending_experiment.agents.ppo.sb3.pocar import POCAR
-from lending_experiment.agents.ppo.sb3.rrm import RRM
+from lending_experiment.agents.ppo_wrapper_env import PPOEnvWrapper
+from lending_experiment.agents.ppo import PPO
+from lending_experiment.agents.pocar import POCAR
+from lending_experiment.agents.rrm import RRM
+from lending_experiment.agents.sellf import SELLF
 
 from lending_experiment.environments.resampling import (
     ResamplingEnv,
@@ -48,7 +49,15 @@ ALG_PARAMS["sellf"] = {
     "learning_rate": 1e-5,
     "beta_0": 1,
     "beta_1": 0.5,
+    "beta_2": 0.5,
     "beta_3": 0.5,
+}
+ALG_PARAMS["sellf1"] = {
+    "learning_rate": 1e-5,
+    "beta_0": 1,
+    "beta_1": 0.5,
+    "beta_2": 1,
+    "beta_3": 0.,
 }
 ALG_PARAMS["pocar_full"] = {
     "learning_rate": 1e-5,
@@ -63,15 +72,15 @@ ALG_PARAMS["pocar"] = {
     "beta_1": 0.5,
 }
 ALG_PARAMS["rrm"] = {
-    "learning_rate" : 1e-5,
-    "beta_0" : 0.5,
+    "learning_rate": 1e-5,
+    "beta_0": 0.5,
 }
 
 
 def get_env(env_name: str, utility_method: str, algorithm: str) -> ResamplingEnv:
     if algorithm == "pocar_full":
         delta_method = "full"
-    elif algorithm == "sellf":
+    elif algorithm.find("sellf") != -1:
         delta_method = "imputation"
     else:
         delta_method = "accepted"
@@ -114,6 +123,16 @@ def get_alg(env, config, device):
             device=device,
             **config["algorithm_params"],
         )
+    elif config["algorithm"].find("sellf") != -1:
+        model = SELLF(
+            env=env,
+            policy_kwargs={
+                "use_predictor": config["use_predictor"],
+            },
+            omega=config["omega"],
+            device=device,
+            **config["algorithm_params"],
+        )
 
     return model
 
@@ -130,16 +149,9 @@ def train(train_timesteps, env, save_dir, config):
     shutil.rmtree(save_dir, ignore_errors=True)
     Path(save_dir).mkdir(parents=True, exist_ok=True)
 
-    checkpoint_callback = CheckpointCallback(
-        save_freq=10_000, save_path=save_dir, name_prefix="rl_model"
-    )
-
     model.set_logger(configure(folder=save_dir))
-    model.learn(total_timesteps=train_timesteps)  # , callback=checkpoint_callback)
+    model.learn(total_timesteps=train_timesteps)
     model.save(save_dir + "/final_model")
-
-    # Once we finish learning, plot the returns over time and save into the experiments directory
-    # plot_rets(EXP_DIR)
 
 
 def evaluate(env, agent, seeds, eval_dir):
@@ -207,7 +219,7 @@ def main(config):
     )
     save_dir = f"{exp_dir}/models"
     eval_dir = f"{exp_dir}/eval"
-    config["use_predictor"] = config["algorithm"] == "sellf"
+    config["use_predictor"] = config["algorithm"].find("sellf") != -1
     env = get_env(config["env_name"], config["mu_type"], config["algorithm"])
     train(
         train_timesteps=config["train_timesteps"],

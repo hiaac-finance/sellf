@@ -13,7 +13,7 @@ from stable_baselines3.common.vec_env import VecEnv
 from stable_baselines3.common.utils import explained_variance
 
 
-from lending_experiment.agents.on_policy_algorithm import OnPolicyAlgorithm
+from agents.on_policy_algorithm import OnPolicyAlgorithm
 
 
 class PPO(OnPolicyAlgorithm):
