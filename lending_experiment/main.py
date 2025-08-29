@@ -48,16 +48,9 @@ ALG_PARAMS["ppo"] = {"learning_rate": 1e-5}
 ALG_PARAMS["sellf"] = {
     "learning_rate": 1e-5,
     "beta_0": 1,
-    "beta_1": 0.5,
-    "beta_2": 0.5,
+    "beta_1": 1.,
+    "beta_2": 1.,
     "beta_3": 0.5,
-}
-ALG_PARAMS["sellf1"] = {
-    "learning_rate": 1e-5,
-    "beta_0": 1,
-    "beta_1": 0.5,
-    "beta_2": 1,
-    "beta_3": 0.,
 }
 ALG_PARAMS["pocar_full"] = {
     "learning_rate": 1e-5,

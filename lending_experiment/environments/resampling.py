@@ -71,6 +71,9 @@ class ResamplingEnv(gym.Env):
                 ]
             ]
         )
+        self.pi_history = []
+        self.group_masks = None
+        self.hist_max_len = 20
         self.data = copy.deepcopy(self.init_data)
         self.init_pool = []
         self.pool = []
@@ -250,14 +253,6 @@ class ResamplingEnv(gym.Env):
             out=np.zeros_like(error),
         )
 
-        # calculate variance ignoring rows with value 0
-        action_var = [
-            np.var(self.data["action_prob"][:, i][self.data["action_prob"][:, i] != 0])
-            for i in range(2)
-        ]
-
-        # TEST: replacing variance 
-
         pred_mean = np.sum(self.data["pred"], axis=0)
         pred_mean = np.true_divide(
             pred_mean,
@@ -266,41 +261,109 @@ class ResamplingEnv(gym.Env):
             out=np.zeros_like(pred_mean),
         )
 
-        delta_pred = [0, 0]
-        prob_dist = [0, 0]
-        for i in range(2):
-            a = accept_rate[i]
-            prob_dist[i] = np.sqrt(action_var[i]) / (a * (1 - a))
-            error_bound = error_rate[i] + prob_dist[i]
 
-            #print("group:", i)
-            #print(f"error: {error_rate[i]:.2f}, dist: {np.sqrt(action_var[i]) / (a * (1 - a)):.2f}")
-            #print("")
+        if self.group_masks is None:
+            self.group_masks = np.zeros((self.n_groups, self.n_applicants), dtype=bool)
+            for i in range(self.n_applicants):
+                group_idx = np.argmax(self.pool[i]["group"])
+                self.group_masks[group_idx, i] = True
+        
+        K = len(self.pi_history)
+        if K == 0:
+            self.delta_pred = 0
+            self.delta_var = 0
+            self.error_rate = error_rate
+            self.prob_dist = [0, 0]
+            self.var_gap = [0, 0]
+            return
+        
+        pi_last = self.pi_history[-1]
+        prob_dist = [0, 0]
+        delta_pred = [0, 0]
+        for g in range(self.n_groups):
+            mask = self.group_masks[g]
+
+            pi_stack = []
+            for k in range(K):
+                pi_stack.append(self.pi_history[k][mask, g])
+            pi_stack = np.stack(pi_stack, axis=0)  # (K, num_applicants_in_group)
+
+            one_minus_pi = 1 - pi_stack 
+            accept_any = 1 - np.prod(one_minus_pi, axis=0) 
+            reject_last = 1 - pi_last[mask, g]
+
+            q = np.mean(accept_any)
+            r = np.mean(reject_last)
+
+            w = (q / r) * (reject_last / accept_any)
+
+            dist_term = np.sum(accept_any * (w - 1) ** 2)
+            dist_term /= np.sum(accept_any)
+            prob_dist[g] = np.sqrt(dist_term)
+
+            error_bound = error_rate[g] + prob_dist[g]
             if self.utility_method in ["qualification", "accuracy"]:
-                delta_pred[i] = error_bound * (1 - a)
+                delta_pred[g] = error_bound * (1 - accept_rate[g])
             else:
-                delta_pred[i] = error_bound * (1 - a) / pred_mean[i]
+                delta_pred[g] = error_bound * (1 - accept_rate[g]) / pred_mean[g]
 
         self.delta_pred = np.max(delta_pred) - np.min(delta_pred)
+        self.delta_var = 0
+        self.error_rate = error_rate
+        self.prob_dist = prob_dist
+        self.var_gap = [0, 0]
+
+        # # calculate variance ignoring rows with value 0
+        # action_var = [
+        #     np.var(self.data["action_prob"][:, i][self.data["action_prob"][:, i] != 0])
+        #     for i in range(2)
+        # ]
+
+        # # TEST: replacing variance 
+
+        # pred_mean = np.sum(self.data["pred"], axis=0)
+        # pred_mean = np.true_divide(
+        #     pred_mean,
+        #     group_counts_real,
+        #     where=group_counts_real != 0,
+        #     out=np.zeros_like(pred_mean),
+        # )
+
+        # delta_pred = [0, 0]
+        # prob_dist = [0, 0]
+        # for i in range(2):
+        #     a = accept_rate[i]
+        #     prob_dist[i] = np.sqrt(action_var[i]) / (a * (1 - a))
+        #     error_bound = error_rate[i] + prob_dist[i]
+
+        #     #print("group:", i)
+        #     #print(f"error: {error_rate[i]:.2f}, dist: {np.sqrt(action_var[i]) / (a * (1 - a)):.2f}")
+        #     #print("")
+        #     if self.utility_method in ["qualification", "accuracy"]:
+        #         delta_pred[i] = error_bound * (1 - a)
+        #     else:
+        #         delta_pred[i] = error_bound * (1 - a) / pred_mean[i]
+
+        # self.delta_pred = np.max(delta_pred) - np.min(delta_pred)
         #print(f"delta_pred: {self.delta_pred:.2f}")
 
 
-        var_gap = [0, 0]
-        for i in range(2):
-            if self.utility_method in ["qualification", "accuracy"]:
-                var_gap[i] = np.sqrt(action_var[i]) / accept_rate[i]
-            else:
-                var_gap[i] = np.sqrt(action_var[i]) / (accept_rate[i] * pred_mean[i])
+        # var_gap = [0, 0]
+        # for i in range(2):
+        #     if self.utility_method in ["qualification", "accuracy"]:
+        #         var_gap[i] = np.sqrt(action_var[i]) / accept_rate[i]
+        #     else:
+        #         var_gap[i] = np.sqrt(action_var[i]) / (accept_rate[i] * pred_mean[i])
 
-        # get group with highest rejection        
-        i = np.argmax(1 - accept_rate)
-        j = 1 - i
+        # # get group with highest rejection        
+        # i = np.argmax(1 - accept_rate)
+        # j = 1 - i
 
-        self.delta_var = var_gap[i] - var_gap[j]
+        # self.delta_var = var_gap[i] - var_gap[j]
 
-        self.error_rate = error_rate
-        self.prob_dist = prob_dist
-        self.var_gap = var_gap
+        # self.error_rate = error_rate
+        # self.prob_dist = prob_dist
+        # self.var_gap = var_gap
 
 
     def sample_applicant(self):
@@ -319,8 +382,10 @@ class ResamplingEnv(gym.Env):
             self.pool[idx]["pred"] = pred
             self.update_utility(idx, label, pred, group_idx, action, init=True)
 
+        if len(self.pi_history) <= self.hist_max_len:
+            self.pi_history.append(self.init_data["action_prob"].copy())
         self.data = self.init_data.copy()
-
+        
         self.compute_disparity()
 
 
