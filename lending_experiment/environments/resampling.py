@@ -34,10 +34,11 @@ class ResamplingEnv(gym.Env):
         self.delta_method = delta_method
         self.action_space = spaces.Discrete(2)
 
-        self.get_label = lambda x: 0
-        self.get_action = lambda x: 0
-        self.get_label_pred = lambda x: 0
-        self.get_action_prob = lambda x: 0.5
+        self.get_label = lambda feat, g : 0
+        self.get_action = lambda feat, g : 0
+        self.get_label_pred = lambda feat, g : 0
+        self.get_action_prob = lambda feat, g : 0
+        self.get_action_prob_list = lambda feat, g : [0.5]
 
         resource_space = spaces.Box(
             low=0.0,
@@ -60,6 +61,7 @@ class ResamplingEnv(gym.Env):
             [
                 (col, np.zeros((self.n_applicants, self.n_groups), dtype=np.float32))
                 for col in [
+                    "group",
                     "utility_real",
                     "active_real",
                     "utility",
@@ -148,6 +150,7 @@ class ResamplingEnv(gym.Env):
 
     def update_utility(self, idx, label, pred, group_idx, action, init=False):
         """Update the difference in utility for the current applicant. Also updates the utility in the pool."""
+        features = self.pool[idx]["features"]
         # First, calculate real utility
         active = 1
         if self.utility_method == "accuracy":
@@ -162,14 +165,14 @@ class ResamplingEnv(gym.Env):
             self.init_data["utility_real"][idx, group_idx] = utility_value
             self.init_data["active_real"][idx, group_idx] = active
             self.init_data["action"][idx, group_idx] = action
-            self.init_data["action_prob"][idx, group_idx] = self.get_action_prob(idx)
+            self.init_data["action_prob"][idx, group_idx] = self.get_action_prob(features, group_idx)
             self.init_data["error"][idx, group_idx] = pred - label
             self.init_data["pred"][idx, group_idx] = pred
         else:
             self.data["utility_real"][idx, group_idx] = utility_value
             self.data["active_real"][idx, group_idx] = active
             self.data["action"][idx, group_idx] = action
-            self.data["action_prob"][idx, group_idx] = self.get_action_prob(idx)
+            self.data["action_prob"][idx, group_idx] = self.get_action_prob(features, group_idx)
             self.data["error"][idx, group_idx] = pred - label
             self.data["pred"][idx, group_idx] = pred
 
@@ -375,15 +378,14 @@ class ResamplingEnv(gym.Env):
         for k, v in self.init_data.items():
             self.init_data[k] = np.zeros_like(v)
         for idx in range(len(self.pool)):
-            action = self.get_action(idx)
-            pred = self.get_label_pred(idx)
-            label = self.pool[idx]["label"]
+            features = self.pool[idx]["features"]
             group_idx = self.pool[idx]["group"].argmax()
+            action = self.get_action(features, group_idx)
+            pred = self.get_label_pred(features, group_idx)
+            label = self.pool[idx]["label"]
             self.pool[idx]["pred"] = pred
+            self.init_data["group"][idx, group_idx] = 1
             self.update_utility(idx, label, pred, group_idx, action, init=True)
-
-        if len(self.pi_history) <= self.hist_max_len:
-            self.pi_history.append(self.init_data["action_prob"].copy())
         self.data = self.init_data.copy()
         
         self.compute_disparity()
@@ -418,8 +420,8 @@ class LendingEnv(ResamplingEnv):
             features[x] = 1
             group = np.zeros(num_groups, dtype=np.float32)
             group[g] = 1
-            pred = self.get_label_pred(i)
-            action = self.get_action(i)
+            pred = self.get_label_pred(features, group)
+            action = self.get_action(features, group)
             self.init_pool.append(
                 {
                     "features": features,
@@ -451,7 +453,7 @@ class LendingEnv(ResamplingEnv):
         y = self.get_label(group, new_score)
         self.pool[idx]["label"] = y
 
-        pred = self.get_label_pred(idx)
+        pred = self.get_label_pred(self.pool[idx]["features"], group)
         self.pool[idx]["pred"] = pred
 
 
@@ -494,5 +496,5 @@ class EnemEnv(ResamplingEnv):
         label = self.get_label(group, new_age)
         self.pool[idx]["label"] = label
 
-        pred = self.get_label_pred(self.pool[idx])
+        pred = self.get_label_pred(new_features, group)
         self.pool[idx]["pred"] = pred

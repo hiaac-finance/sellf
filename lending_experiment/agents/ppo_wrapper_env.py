@@ -15,8 +15,7 @@ class PPOEnvWrapper(gym.Wrapper):
             low=np.inf,
             high=np.inf,
             shape=(
-                env.observation_space["applicant_features"].shape[0]
-                + env.n_groups,
+                env.observation_space["applicant_features"].shape[0] + env.n_groups,
             ),
         )
 
@@ -30,11 +29,10 @@ class PPOEnvWrapper(gym.Wrapper):
     def set_agent(self, agent):
         self.policy = agent.policy
 
-    def _get_label_pred(self, idx):
-        applicant = self.env.pool[idx]
+    def _get_label_pred(self, features, group):
         obs = {
-            "applicant_features": applicant["features"],
-            "group": applicant["group"],
+            "applicant_features": features,
+            "group": group,
         }
         obs = self.process_observation(obs)
         obs = np.array(obs).reshape(1, -1)
@@ -42,12 +40,11 @@ class PPOEnvWrapper(gym.Wrapper):
         with torch.no_grad():
             pred = self.policy.get_label(obs).cpu().numpy()[0]
         return pred
-    
-    def _get_action(self, idx):
-        applicant = self.env.pool[idx]
+
+    def _get_action(self, features, group):
         obs = {
-            "applicant_features": applicant["features"],
-            "group": applicant["group"],
+            "applicant_features": features,
+            "group": group,
         }
         obs = self.process_observation(obs)
         obs = np.array(obs).reshape(1, -1)
@@ -55,12 +52,11 @@ class PPOEnvWrapper(gym.Wrapper):
         with torch.no_grad():
             pred = self.policy.get_action(obs).cpu().numpy()[0]
         return pred
-    
-    def _get_action_prob(self, idx):
-        applicant = self.env.pool[idx]
+
+    def _get_action_prob(self, features, group):
         obs = {
-            "applicant_features": applicant["features"],
-            "group": applicant["group"],
+            "applicant_features": features,
+            "group": group,
         }
         obs = self.process_observation(obs)
         obs = np.array(obs).reshape(1, -1)
@@ -69,18 +65,29 @@ class PPOEnvWrapper(gym.Wrapper):
             pred = self.policy.get_action_prob(obs).cpu().numpy()[0]
         return pred
 
-    def get_applicant_obs(self, idx):
-        """Get the observation for a specific applicant."""
-        applicant = self.env.pool[idx]
+    def _get_action_prob_list(self, features, group):
         obs = {
-            "applicant_features": applicant["features"],
-            "group": applicant["group"],
+            "applicant_features": features,
+            "group": group,
         }
-        return self.process_observation(obs)
+        obs = self.process_observation(obs)
+        obs = np.array(obs).reshape(1, -1)
+        obs = torch.tensor(obs, dtype=torch.float32).to(self.policy.device)
+        pred_list = []
+        with torch.no_grad():
+            for policy in self.policy_hist:
+                pred = policy.get_action_prob(obs).cpu().numpy()[0]
+                pred_list.append(pred)
+        return pred_list
 
     def process_observation(self, obs):
         credit_score = obs["applicant_features"]
         group = obs["group"]
+        # if group is scalar, transform to array with 2 values
+        if np.isscalar(group):
+            group_aux = np.zeros(2)
+            group_aux[group] = 1
+            group = group_aux
         return np.concatenate((credit_score, group), axis=0)
 
     def reset(self):
