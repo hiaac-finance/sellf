@@ -118,7 +118,8 @@ class ResamplingEnv(gym.Env):
                 "label" : label,
                 "pred" : pred,
                 "error" : 0 if pred == label else 1,
-                "one_minus_pi" : [1 - x for x in self.get_action_prob_list(features, group_idx)],
+                "one_minus_pi" : np.prod([1 - x for x in self.get_action_prob_list(features, group_idx)]),
+                "one_minus_pi_last" : self.data["action_prob"][idx, group_idx],
             })
 
         self.update_utility(
@@ -279,18 +280,14 @@ class ResamplingEnv(gym.Env):
             self.var_gap = [0, 0]
             return
 
-        # assert that every entry of self.pool_accepted has the same number of elements in ["one_minus_pi"]
-        one_minus_pi_lengths = [len(app["one_minus_pi"]) for i in range(2) for app in self.pool_accepted[i]]
-        assert all(length == one_minus_pi_lengths[0] for length in one_minus_pi_lengths)
-
         error_rate = [0, 0]
         dist_term = [0, 0]
         error_bound = [0, 0]
         delta_pred = [0, 0]
         for i in range(2):
             error_rate[i] = np.mean([app["error"] for app in self.pool_accepted[i]])
-            one_minus_pi_last = np.array([app["one_minus_pi"][-1] for app in self.pool_accepted[i]])
-            one_minus_pi = np.array([1 - np.prod(app["one_minus_pi"]) for app in self.pool_accepted[i]])
+            one_minus_pi_last = np.array([app["one_minus_pi_last"] for app in self.pool_accepted[i]])
+            one_minus_pi = np.array([1 - app["one_minus_pi"] for app in self.pool_accepted[i]])
             q = np.mean(one_minus_pi)
             r = 1 - accept_rate[i]
             w = (q / r) * (one_minus_pi_last / one_minus_pi)
@@ -310,58 +307,6 @@ class ResamplingEnv(gym.Env):
         self.error_rate = error_rate
         self.prob_dist = dist_term
         self.var_gap = [0, 0]
-        # # calculate variance ignoring rows with value 0
-        # action_var = [
-        #     np.var(self.data["action_prob"][:, i][self.data["action_prob"][:, i] != 0])
-        #     for i in range(2)
-        # ]
-
-        # # TEST: replacing variance 
-
-        # pred_mean = np.sum(self.data["pred"], axis=0)
-        # pred_mean = np.true_divide(
-        #     pred_mean,
-        #     group_counts_real,
-        #     where=group_counts_real != 0,
-        #     out=np.zeros_like(pred_mean),
-        # )
-
-        # delta_pred = [0, 0]
-        # prob_dist = [0, 0]
-        # for i in range(2):
-        #     a = accept_rate[i]
-        #     prob_dist[i] = np.sqrt(action_var[i]) / (a * (1 - a))
-        #     error_bound = error_rate[i] + prob_dist[i]
-
-        #     #print("group:", i)
-        #     #print(f"error: {error_rate[i]:.2f}, dist: {np.sqrt(action_var[i]) / (a * (1 - a)):.2f}")
-        #     #print("")
-        #     if self.utility_method in ["qualification", "accuracy"]:
-        #         delta_pred[i] = error_bound * (1 - a)
-        #     else:
-        #         delta_pred[i] = error_bound * (1 - a) / pred_mean[i]
-
-        # self.delta_pred = np.max(delta_pred) - np.min(delta_pred)
-        #print(f"delta_pred: {self.delta_pred:.2f}")
-
-
-        # var_gap = [0, 0]
-        # for i in range(2):
-        #     if self.utility_method in ["qualification", "accuracy"]:
-        #         var_gap[i] = np.sqrt(action_var[i]) / accept_rate[i]
-        #     else:
-        #         var_gap[i] = np.sqrt(action_var[i]) / (accept_rate[i] * pred_mean[i])
-
-        # # get group with highest rejection        
-        # i = np.argmax(1 - accept_rate)
-        # j = 1 - i
-
-        # self.delta_var = var_gap[i] - var_gap[j]
-
-        # self.error_rate = error_rate
-        # self.prob_dist = prob_dist
-        # self.var_gap = var_gap
-
 
     def sample_applicant(self):
         selected = np.random.choice(len(self.pool), size=1)[0]
@@ -388,7 +333,7 @@ class ResamplingEnv(gym.Env):
                 features = applicant["features"]
                 group = i
                 prob = self.get_action_prob(features, group)
-                self.pool_accepted[i][j]["one_minus_pi"].append(1 - prob)
+                self.pool_accepted[i][j]["one_minus_pi"] *= (1 - prob)
 
         self.compute_disparity()
 
