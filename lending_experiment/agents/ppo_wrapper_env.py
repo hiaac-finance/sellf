@@ -2,6 +2,7 @@ import gym
 import numpy as np
 import torch
 from gym import spaces
+from copy import deepcopy
 
 
 class PPOEnvWrapper(gym.Wrapper):
@@ -22,12 +23,20 @@ class PPOEnvWrapper(gym.Wrapper):
         self.action_space = spaces.Discrete(n=2)
         self.env = env
         self.num_applicants = len(self.env.pool)
+        self.policy_hist = []
         self.env.get_label_pred = self._get_label_pred
         self.env.get_action = self._get_action
         self.env.get_action_prob = self._get_action_prob
+        self.env.get_action_prob_list = self._get_action_prob_list
 
     def set_agent(self, agent):
         self.policy = agent.policy
+
+    def update_models(self):
+        # save a copy of current policy
+        if len(self.policy_hist) <= 20:
+            self.policy_hist.append(deepcopy(self.policy))
+        self.env.update_models()
 
     def _get_label_pred(self, features, group):
         obs = {
