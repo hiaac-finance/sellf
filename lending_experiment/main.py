@@ -79,6 +79,12 @@ def get_env(env_name: str, utility_method: str, algorithm: str) -> ResamplingEnv
         delta_method = "accepted"
     if env_name == "fico":
         env = LendingEnv(utility_method=utility_method, delta_method=delta_method)
+    elif env_name == "fico_equal":
+        env = LendingEnv(
+            utility_method=utility_method,
+            delta_method=delta_method,
+            group_ratios="equal",
+        )
     elif env_name == "enem":
         env = EnemEnv(
             n_features=130, utility_method=utility_method, delta_method=delta_method

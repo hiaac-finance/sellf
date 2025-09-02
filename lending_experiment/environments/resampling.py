@@ -343,10 +343,38 @@ class LendingEnv(ResamplingEnv):
     Environment for lending experiments.
     """
 
+    def __init__(
+        self,
+        cost: float = 0.8,
+        n_applicants: int = 10000,
+        utility_method: str = "accuracy",
+        delta_method: str = "full",
+        group_ratios: str = "data",
+    ):
+        assert group_ratios in ["data", "equal"]
+        self.n_groups = 2
+        self.cost = cost
+        self.n_applicants = n_applicants
+        self.n_features = 10
+        self.utility_method = utility_method
+        self.delta_method = delta_method
+        self.group_ratios = group_ratios
+        super().__init__(
+            n_groups=self.n_groups,
+            cost=self.cost,
+            n_applicants=self.n_applicants,
+            n_features=self.n_features,
+            utility_method=self.utility_method,
+            delta_method=self.delta_method,
+        )
+
     def load_pool(self):
         with open("data/fico.pkl", "rb") as f:
             data = pkl.load(f)
-        groups_probs = data["group_likelihoods"]
+        if self.group_ratios == "data":
+            groups_probs = data["group_likelihoods"]
+        else:
+            groups_probs = [0.5, 0.5]
         cluster_probs = data["cluster_probabilities"]
         success_probs = data["success_probabilities"]
 
@@ -374,8 +402,8 @@ class LendingEnv(ResamplingEnv):
                     "features": features,
                     "group": group,
                     "label": y,
-                    "pred" : pred,
-                    "action" : action,
+                    "pred": pred,
+                    "action": action,
                 }
             )
 
