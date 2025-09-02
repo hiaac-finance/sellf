@@ -42,8 +42,10 @@ class RRM(OnPolicyAlgorithm):
 
         if hasattr(env, "utility_method"):
             self.utility_method = env.utility_method
+            self.cost = env.cost
         else:
             self.utility_method = env.get_attr("utility_method")[0]
+            self.cost = env.get_attr("cost")[0]
 
         self.batch_size = batch_size
         self.n_epochs = n_epochs
@@ -105,6 +107,8 @@ class RRM(OnPolicyAlgorithm):
                 fairness_cost = self.compute_fair_penalization(
                     loss, labels, groups
                 )
+                weights = (1 - self.cost) * (labels) + self.cost * (1 - labels)
+                loss *= weights
                 loss = loss.mean() + self.beta_0 * fairness_cost
 
                 self.policy.optimizer.zero_grad()
