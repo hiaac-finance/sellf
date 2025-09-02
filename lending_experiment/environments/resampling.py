@@ -5,6 +5,7 @@ import pickle as pkl
 
 import gym
 from gym import spaces
+from time import time
 
 
 class ResamplingEnv(gym.Env):
@@ -34,11 +35,11 @@ class ResamplingEnv(gym.Env):
         self.delta_method = delta_method
         self.action_space = spaces.Discrete(2)
 
-        self.get_label = lambda feat, g : 0
-        self.get_action = lambda feat, g : 0
-        self.get_label_pred = lambda feat, g : 0
-        self.get_action_prob = lambda feat, g : 0
-        self.get_action_prob_list = lambda feat, g : [0.5]
+        self.get_label = lambda feat, g: 0
+        self.get_action = lambda feat, g: 0
+        self.get_label_pred = lambda feat, g: 0
+        self.get_action_prob = lambda feat, g: 0
+        self.get_action_prob_list = lambda feat, g: [0.5]
 
         resource_space = spaces.Box(
             low=0.0,
@@ -73,13 +74,16 @@ class ResamplingEnv(gym.Env):
                 ]
             ]
         )
-        self.pi_history = []
-        self.group_masks = None
-        self.hist_max_len = 20
         self.data = copy.deepcopy(self.init_data)
         self.init_pool = []
         self.pool = []
         self.pool_accepted = [[], []]
+        self.timestep = 0
+        self.n_updates = 0
+        self.lazy_updates = 20
+        self.error_bound = np.zeros(self.n_groups)
+        self.delta_var = 0
+        self.var_gap = [0, 0]
         self.load_pool()
         self._state_init()
 
@@ -113,14 +117,13 @@ class ResamplingEnv(gym.Env):
         pred = self.pool[idx]["pred"]
         group_idx = np.argmax(self.pool[idx]["group"])
         if action == 1 and len(self.pool_accepted[group_idx]) < 20_000:
-            self.pool_accepted[group_idx].append({
-                "features" : features,
-                "label" : label,
-                "pred" : pred,
-                "error" : 0 if pred == label else 1,
-                "one_minus_pi" : np.prod([1 - x for x in self.get_action_prob_list(features, group_idx)]),
-                "one_minus_pi_last" : self.data["action_prob"][idx, group_idx],
-            })
+            self.pool_accepted[group_idx].append(
+                {
+                    "features": features,
+                    "label": label,
+                    "one_minus_pi": None,
+                }
+            )
 
         self.update_utility(
             idx=idx,
@@ -180,14 +183,18 @@ class ResamplingEnv(gym.Env):
             self.init_data["utility_real"][idx, group_idx] = utility_value
             self.init_data["active_real"][idx, group_idx] = active
             self.init_data["action"][idx, group_idx] = action
-            self.init_data["action_prob"][idx, group_idx] = self.get_action_prob(features, group_idx)
+            self.init_data["action_prob"][idx, group_idx] = self.get_action_prob(
+                features, group_idx
+            )
             self.init_data["error"][idx, group_idx] = pred - label
             self.init_data["pred"][idx, group_idx] = pred
         else:
             self.data["utility_real"][idx, group_idx] = utility_value
             self.data["active_real"][idx, group_idx] = active
             self.data["action"][idx, group_idx] = action
-            self.data["action_prob"][idx, group_idx] = self.get_action_prob(features, group_idx)
+            self.data["action_prob"][idx, group_idx] = self.get_action_prob(
+                features, group_idx
+            )
             self.data["error"][idx, group_idx] = pred - label
             self.data["pred"][idx, group_idx] = pred
 
@@ -272,41 +279,47 @@ class ResamplingEnv(gym.Env):
             out=np.zeros_like(pred_mean),
         )
 
-        if len(self.pool_accepted[0]) == 0 or len(self.pool_accepted[1]) == 0:
-            self.delta_pred = 0
-            self.delta_var = 0
-            self.error_rate = [0 , 0]
-            self.prob_dist = [0, 0]
-            self.var_gap = [0, 0]
-            return
-
-        error_rate = [0, 0]
-        dist_term = [0, 0]
-        error_bound = [0, 0]
-        delta_pred = [0, 0]
-        for i in range(2):
-            error_rate[i] = np.mean([app["error"] for app in self.pool_accepted[i]])
-            one_minus_pi_last = np.array([app["one_minus_pi_last"] for app in self.pool_accepted[i]])
-            one_minus_pi = np.array([1 - app["one_minus_pi"] for app in self.pool_accepted[i]])
-            q = np.mean(one_minus_pi)
-            r = 1 - accept_rate[i]
-            w = (q / r) * (one_minus_pi_last / one_minus_pi)
-            # check if w is nan
-            dist_term[i] = np.sqrt(np.mean((w - 1) ** 2))
-            error_bound[i] = error_rate[i] + dist_term[i]
-
-            if self.utility_method in ["qualification", "accuracy"]:
-                delta_pred[i] = error_bound[i] * (1 - accept_rate[i])
-            else:
-                delta_pred[i] = error_bound[i] * (1 - accept_rate[i]) / pred_mean[i]
-            
-            
+        # here, the error bound will already be calculated
+        delta_pred = np.zeros(self.n_groups)
+        if self.utility_method in ["qualification", "accuracy"]:
+            delta_pred = self.error_bound * (1 - accept_rate)
+        else:
+            delta_pred = self.error_bound * (1 - accept_rate) / pred_mean
 
         self.delta_pred = np.max(delta_pred) - np.min(delta_pred)
-        self.delta_var = 0
-        self.error_rate = error_rate
-        self.prob_dist = dist_term
-        self.var_gap = [0, 0]
+
+        # if len(self.pool_accepted[0]) == 0 or len(self.pool_accepted[1]) == 0:
+        #     self.delta_pred = 0
+        #     self.delta_var = 0
+        #     self.error_rate = [0 , 0]
+        #     self.prob_dist = [0, 0]
+        #     self.var_gap = [0, 0]
+        #     return
+
+        # error_rate = [0, 0]
+        # dist_term = [0, 0]
+        # error_bound = [0, 0]
+        # delta_pred = [0, 0]
+        # for i in range(2):
+        #     error_rate[i] = np.mean([app["error"] for app in self.pool_accepted[i]])
+        #     one_minus_pi_last = np.array([app["one_minus_pi_last"] for app in self.pool_accepted[i]])
+        #     one_minus_pi = np.array([1 - app["one_minus_pi"] for app in self.pool_accepted[i]])
+        #     q = np.mean(one_minus_pi)
+        #     r = 1 - accept_rate[i]
+        #     w = (q / r) * (one_minus_pi_last / one_minus_pi)
+        #     # check if w is nan
+        #     dist_term[i] = np.sqrt(np.mean((w - 1) ** 2))
+        #     error_bound[i] = error_rate[i] + dist_term[i]
+
+        #     if self.utility_method in ["qualification", "accuracy"]:
+        #         delta_pred[i] = error_bound[i] * (1 - accept_rate[i])
+        #     else:
+        #         delta_pred[i] = error_bound[i] * (1 - accept_rate[i]) / pred_mean[i]
+
+        # self.delta_var = 0
+        # self.error_rate = error_rate
+        # self.prob_dist = dist_term
+        # self.var_gap = [0, 0]
 
     def sample_applicant(self):
         selected = np.random.choice(len(self.pool), size=1)[0]
@@ -327,14 +340,80 @@ class ResamplingEnv(gym.Env):
             self.update_utility(idx, label, pred, group_idx, action, init=True)
         self.data = self.init_data.copy()
 
-        # update accepted pool
-        for i in range(2):
-            for j, applicant in enumerate(self.pool_accepted[i]):
-                features = applicant["features"]
-                group = i
-                prob = self.get_action_prob(features, group)
-                self.pool_accepted[i][j]["one_minus_pi"] *= (1 - prob)
+        print("Updating calculations")
 
+        start = time()
+        # update accepted pool
+        # Calculate "one_minus_pi" of new accepted individuals
+        for i in range(self.n_groups):
+            group = np.zeros(self.n_groups)
+            group[i] = 1
+            for j in range(len(self.pool_accepted[i])):
+                if self.pool_accepted[i][j]["one_minus_pi"] is None:
+                    features = self.pool_accepted[i][j]["features"]
+                    prob_list = self.get_action_prob_list(features, group)
+                    self.pool_accepted[i][j]["one_minus_pi"] = np.prod(
+                        [1 - x for x in prob_list]
+                    )
+
+        end = time()
+        print(
+            f"Calculating the probs of new accepted individuals took {end - start:.1f} seconds"
+        )
+        # Here I need to calculate the error_bound, that is the error of the predictor plus
+        # the Chi Squared divergence term
+
+        start = time()
+        self.error_accepted = np.zeros(self.n_groups)
+        self.chi_divergence = np.zeros(self.n_groups)
+
+        if len(self.pool_accepted[0]) == 0 or len(self.pool_accepted[1]) == 0:
+            return
+
+        for i in range(self.n_groups):
+            # Create a large dataset of accepted applicants
+            group = np.zeros(
+                (len(self.pool_accepted[i]), self.n_groups), dtype=np.float32
+            )
+            group[:, i] = 1
+            features = np.array(
+                [applicant["features"] for applicant in self.pool_accepted[i]]
+            )
+
+            # Calculate the error of the updated classifier on the accepted population
+            labels = np.array(
+                [applicant["label"] for applicant in self.pool_accepted[i]]
+            )
+            preds = self.get_pred_batch(features, group)
+            self.error_accepted[i] = (preds - labels).mean()
+
+            # Calculate the chi_divergence
+            one_minus_pi = self.get_action_prob_batch(features, group)
+            one_minus_pi_hist = np.array(
+                [applicant["one_minus_pi"] for applicant in self.pool_accepted[i]]
+            )
+            one_minus_pi_hist *= one_minus_pi
+
+            # Save new one_minus_pi_hist
+            for j in range(len(self.pool_accepted[i])):
+                self.pool_accepted[i][j]["one_minus_pi"] = one_minus_pi_hist[j]
+
+            one_minus_pi_hist = 1 - one_minus_pi_hist
+            q = one_minus_pi_hist.mean()
+            r = one_minus_pi.mean()
+
+            w = (q / r) * (one_minus_pi / one_minus_pi_hist)
+
+            self.chi_divergence[i] = np.mean((w - 1) ** 2)
+
+        end = time()
+        print(
+            f"Calculating the error and chi divergence took {end - start:.1f} seconds"
+        )
+
+        self.error_bound = self.error_accepted + self.chi_divergence
+
+        self.n_updates += 1
         self.compute_disparity()
 
 

@@ -94,7 +94,7 @@ class Agent(nn.Module):
         log_odds = self.predictor(x)
         probs = torch.sigmoid(log_odds)
         p = torch.rand((x.shape[0]), dtype=torch.float32, device=self.device)
-        labels = (probs > p).float()
+        labels = (probs.reshape(-1) > p).float()
         return labels
 
     def get_action_prob(self, x: torch.Tensor) -> torch.Tensor:

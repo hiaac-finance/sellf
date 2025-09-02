@@ -325,11 +325,11 @@ class SELLF(OnPolicyAlgorithm):
             self.logger.record("train/std", th.exp(self.policy.log_std).mean().item())
 
         
-        error_rate = self.env.get_attr("error_rate")[0]
+        error_rate = self.env.get_attr("error_accepted")[0]
         self.logger.record("train/error_g0", error_rate[0])
         self.logger.record("train/error_g1", error_rate[1])
 
-        prob_dist = self.env.get_attr("prob_dist")[0]
+        prob_dist = self.env.get_attr("chi_divergence")[0]
         self.logger.record("train/dist_g0", prob_dist[0])
         self.logger.record("train/dist_g1", prob_dist[1])
 

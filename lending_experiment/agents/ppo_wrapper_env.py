@@ -3,6 +3,7 @@ import numpy as np
 import torch
 from gym import spaces
 from copy import deepcopy
+from torch.utils.data import DataLoader, TensorDataset
 
 
 class PPOEnvWrapper(gym.Wrapper):
@@ -28,6 +29,8 @@ class PPOEnvWrapper(gym.Wrapper):
         self.env.get_action = self._get_action
         self.env.get_action_prob = self._get_action_prob
         self.env.get_action_prob_list = self._get_action_prob_list
+        self.env.get_action_prob_batch = self._get_action_prob_batch
+        self.env.get_pred_batch = self._get_pred_batch
 
     def set_agent(self, agent):
         self.policy = agent.policy
@@ -73,6 +76,37 @@ class PPOEnvWrapper(gym.Wrapper):
         with torch.no_grad():
             pred = self.policy.get_action_prob(obs).cpu().numpy()[0]
         return pred
+    
+    def _get_action_prob_batch(self, features, group):
+        """Inputs are large datasets. Transform them to loaders and perform batch inference"""
+        data = np.concatenate([features, group], axis=1)
+        data = torch.tensor(data, dtype=torch.float32).to(self.policy.device)
+        dataset = TensorDataset(data)
+        dataloader = DataLoader(dataset, batch_size=1024)
+
+        preds = []
+        with torch.no_grad():
+            for batch in dataloader:
+                batch = batch[0].to(self.policy.device)
+                preds.append(self.policy.get_action_prob(batch).cpu().numpy())
+        return np.concatenate(preds)
+    
+
+    def _get_pred_batch(self, features, group):
+        """Inputs are large datasets. Transform them to loaders and perform batch inference"""
+        data = np.concatenate([features, group], axis=1)
+        data = torch.tensor(data, dtype=torch.float32).to(self.policy.device)
+        dataset = TensorDataset(data)
+        dataloader = DataLoader(dataset, batch_size=1024)
+
+        preds = []
+        with torch.no_grad():
+            for batch in dataloader:
+                batch = batch[0].to(self.policy.device)
+                preds.append(self.policy.get_label(batch).cpu().numpy())
+        return np.concatenate(preds)
+
+    
 
     def _get_action_prob_list(self, features, group):
         obs = {
