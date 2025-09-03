@@ -112,13 +112,13 @@ class POCAR(OnPolicyAlgorithm):
 
                 # Compute value-thresholding (vt) term as part of Eq. 3 from the paper
                 vt_term = th.min(
-                    th.zeros(rollout_data.deltas.shape[0]).to(self.device),
-                    -rollout_data.deltas + th.tensor(self.omega, dtype=th.float32),
+                    th.zeros(rollout_data.delta_obs.shape[0]).to(self.device),
+                    -rollout_data.delta_obs + th.tensor(self.omega, dtype=th.float32),
                 )
 
                 # Compute decrease-in-violation (div) term as part of Eq. 3 from the paper
                 div_cond = th.where(
-                    rollout_data.deltas
+                    rollout_data.delta_obs
                     > th.tensor(self.omega, dtype=th.float32).to(self.device),
                     th.tensor(1, dtype=th.float32).to(self.device),
                     th.tensor(0, dtype=th.float32).to(self.device),
@@ -261,9 +261,7 @@ class POCAR(OnPolicyAlgorithm):
         self.logger.record("train/accept_g0", accept_rate[0])
         self.logger.record("train/accept_g1", accept_rate[1])
         self.logger.record("train/delta", self.rollout_buffer.deltas.mean().item())
-        self.logger.record(
-            "train/delta_real", self.rollout_buffer.delta_reals.mean().item()
-        )
+        self.logger.record("train/delta_obs", self.rollout_buffer.delta_obs.mean().item())
         self.logger.record("train/accuracy", accuracy)
 
         if hasattr(self.policy, "log_std"):

@@ -124,9 +124,12 @@ class OnPolicyAlgorithm:
                 )
 
             idx = env.get_attr("idx")[0]
-            applicant = env.get_attr("pool")[0][idx]
-            label = np.array([applicant["label"]]).astype(np.float32)
-            group = np.array([applicant["group"]]).astype(np.float32)
+            data = env.get_attr("data")[0]
+            label = np.array([data["label"][idx]]).astype(np.float32)
+            group_idx = data["group"][idx]
+            group = np.zeros(2, dtype=np.float32)
+            group[group_idx] = 1
+
 
             imputation = label if actions[0] == 1 else label_pred
 
@@ -157,10 +160,9 @@ class OnPolicyAlgorithm:
                     rewards[idx] += self.gamma * terminal_value
 
             delta = torch.tensor(np.array([env.get_attr("delta")[0]])).float()
-            delta_delta = torch.tensor(np.array([env.get_attr("delta_delta")[0]])).float()
-            delta_real = torch.tensor(np.array([env.get_attr("delta_real")])).float()
+            delta_obs = torch.tensor(np.array([env.get_attr("delta_obs")])).float()
+            delta_delta = torch.tensor(np.array([env.get_attr("delta_delta")])).float()
             delta_pred = torch.tensor(np.array([env.get_attr("delta_pred")])).float()
-            delta_var = torch.tensor(np.array([env.get_attr("delta_var")])).float()
             rollout_buffer.add(
                 self._last_obs,
                 actions,
@@ -173,10 +175,9 @@ class OnPolicyAlgorithm:
                 values,
                 log_probs,
                 delta,
+                delta_obs,
                 delta_delta,
-                delta_real,
                 delta_pred,
-                delta_var,
             )
             self._last_obs = new_obs
             self._last_episode_starts = dones

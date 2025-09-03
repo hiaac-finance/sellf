@@ -23,7 +23,6 @@ class PPOEnvWrapper(gym.Wrapper):
 
         self.action_space = spaces.Discrete(n=2)
         self.env = env
-        self.num_applicants = len(self.env.pool)
         self.policy_hist = []
         self.env.get_label_pred = self._get_label_pred
         self.env.get_action = self._get_action

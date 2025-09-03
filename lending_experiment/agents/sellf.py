@@ -161,8 +161,8 @@ class SELLF(OnPolicyAlgorithm):
 
                 # Compute value-thresholding (vt) term as part of Eq. 3 from the paper
                 vt_term = th.min(
-                    th.zeros(rollout_data.deltas.shape[0]).to(self.device),
-                    -rollout_data.deltas + th.tensor(self.omega / 2, dtype=th.float32),
+                    th.zeros(rollout_data.delta_obs.shape[0]).to(self.device),
+                    -rollout_data.delta_obs + th.tensor(self.omega / 2, dtype=th.float32),
                 )
 
                 # Compute the error constraint
@@ -172,10 +172,10 @@ class SELLF(OnPolicyAlgorithm):
                 )
 
                 # Compute the variance constraint
-                var_term = th.max(
-                    th.zeros(rollout_data.delta_vars.shape[0]).to(self.device),
-                    -rollout_data.delta_vars,
-                )
+                #var_term = th.max(
+                #    th.zeros(rollout_data.delta_vars.shape[0]).to(self.device),
+                #    -rollout_data.delta_vars,
+                #)
 
                 # Bring the 3 terms to scale for numerical stability
                 advantages = (advantages - th.min(advantages)) / (
@@ -187,16 +187,16 @@ class SELLF(OnPolicyAlgorithm):
                 error_term = (error_term - th.min(error_term)) / (
                     th.max(error_term) - th.min(error_term) + 1e-8
                 )
-                var_term = (var_term - th.min(var_term)) / (
-                    th.max(var_term) - th.min(var_term) + 1e-8
-                )
+                #var_term = (var_term - th.min(var_term)) / (
+                #    th.max(var_term) - th.min(var_term) + 1e-8
+                #)
 
                 # Add terms to advantages
                 advantages = (
                     self.beta_0 * advantages
                     + self.beta_1 * vt_term
                     + self.beta_2 * error_term
-                    + self.beta_3 * var_term
+                #    + self.beta_3 * var_term
                 )
 
                 # Normalize advantage
@@ -314,11 +314,8 @@ class SELLF(OnPolicyAlgorithm):
         self.logger.record("train/accept_g0", accept_rate[0])
         self.logger.record("train/accept_g1", accept_rate[1])
         self.logger.record("train/delta", self.rollout_buffer.deltas.mean().item())
-        self.logger.record(
-            "train/delta_real", self.rollout_buffer.delta_reals.mean().item()
-        )
+        self.logger.record("train/delta_obs", self.rollout_buffer.delta_obs.mean().item())
         self.logger.record("train/delta_pred", self.rollout_buffer.delta_preds.mean().item())
-        self.logger.record("train/delta_var", self.rollout_buffer.delta_vars.mean().item())
         self.logger.record("train/accuracy", accuracy)
 
         if hasattr(self.policy, "log_std"):
@@ -329,10 +326,11 @@ class SELLF(OnPolicyAlgorithm):
         self.logger.record("train/error_g0", error_rate[0])
         self.logger.record("train/error_g1", error_rate[1])
 
-        prob_dist = self.env.get_attr("chi_divergence")[0]
-        self.logger.record("train/dist_g0", prob_dist[0])
-        self.logger.record("train/dist_g1", prob_dist[1])
+        error_bound = self.env.get_attr("error_bound")[0]
+        self.logger.record("train/error_bound_g0", error_bound[0])
+        self.logger.record("train/error_bound_g1", error_bound[1])
+        
+        chi_divergence = self.env.get_attr("chi_divergence")[0]
+        self.logger.record("train/divergence_g0", chi_divergence[0])
+        self.logger.record("train/divergence_g1", chi_divergence[1])
 
-        var_gap = self.env.get_attr("var_gap")[0]
-        self.logger.record("train/var_g0", var_gap[0])
-        self.logger.record("train/var_g1", var_gap[1])

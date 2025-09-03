@@ -107,7 +107,7 @@ class RRM(OnPolicyAlgorithm):
                 fairness_cost = self.compute_fair_penalization(
                     loss, labels, groups
                 )
-                weights = (1 - self.cost) * (labels) + self.cost * (1 - labels)
+                weights = (self.cost) * (labels) + (1 - self.cost) * (1 - labels)
                 loss *= weights
                 loss = loss.mean() + self.beta_0 * fairness_cost
 
@@ -145,7 +145,4 @@ class RRM(OnPolicyAlgorithm):
         self.logger.record("train/accept_g0", accept_rate[0])
         self.logger.record("train/accept_g1", accept_rate[1])
         self.logger.record("train/delta", self.rollout_buffer.deltas.mean().item())
-        self.logger.record(
-            "train/delta_real", self.rollout_buffer.delta_reals.mean().item()
-        )
         self.logger.record("train/accuracy", accuracy)

@@ -218,9 +218,6 @@ class PPO(OnPolicyAlgorithm):
         self.logger.record("train/accept_g0", accept_rate[0])
         self.logger.record("train/accept_g1", accept_rate[1])
         self.logger.record("train/delta", self.rollout_buffer.deltas.mean().item())
-        self.logger.record(
-            "train/delta_real", self.rollout_buffer.delta_reals.mean().item()
-        )
         self.logger.record("train/accuracy", accuracy)
 
         if hasattr(self.policy, "log_std"):

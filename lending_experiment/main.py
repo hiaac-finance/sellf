@@ -37,7 +37,6 @@ from lending_experiment.environments.resampling import (
 import argparse
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-device = torch.device("cpu")
 print("Using device: ", device)
 torch.cuda.empty_cache()
 
@@ -48,8 +47,8 @@ ALG_PARAMS["ppo"] = {"learning_rate": 1e-5}
 ALG_PARAMS["sellf"] = {
     "learning_rate": 1e-5,
     "beta_0": 1,
-    "beta_1": 1.,
-    "beta_2": 1.,
+    "beta_1": 1.0,
+    "beta_2": 1.0,
     "beta_3": 0.5,
 }
 ALG_PARAMS["pocar_full"] = {
@@ -71,7 +70,7 @@ ALG_PARAMS["rrm"] = {
 
 
 def get_env(env_name: str, utility_method: str, algorithm: str) -> ResamplingEnv:
-    if algorithm == "pocar_full":
+    if algorithm in ["pocar_full", "ppo", "rrm"]:
         delta_method = "full"
     elif algorithm.find("sellf") != -1:
         delta_method = "imputation"
@@ -173,11 +172,10 @@ def evaluate(env, agent, seeds, eval_dir):
             action = action.item()
             pred = agent.policy.get_label(obs).item()
 
-            applicant = env.pool[env.idx]
             # Logging
-            group_id = np.argmax(applicant["group"])
+            group_id = env.data["group"][env.idx]
             # Add to loans if the agent wants to loan
-            label = applicant["label"]
+            label = env.data["label"][env.idx]
             obs, _, done, _ = env.step(action)
             resource = env.resource
             eval_data.append(
@@ -191,7 +189,7 @@ def evaluate(env, agent, seeds, eval_dir):
                     "correct": int(label == pred),
                     "resource": resource,
                     "delta": env.delta,
-                    "delta_real": env.delta_real,
+                    "delta_obs": env.delta_obs,
                 }
             )
             t += 1
