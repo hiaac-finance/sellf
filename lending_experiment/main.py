@@ -9,30 +9,32 @@ from pathlib import Path
 import time
 
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+# os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 import numpy as np
 import pandas as pd
 import torch
 from stable_baselines3.common.callbacks import CheckpointCallback
 from stable_baselines3.common.logger import configure
-
-# from stable_baselines3.common.monitor import Monitor
+from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv
 
 import sys
 
 sys.path.append("..")
 
-from lending_experiment.agents.ppo.ppo_wrapper_env import PPOEnvWrapper, Monitor
-from lending_experiment.agents.ppo.sb3.ppo import PPO
+from lending_experiment.agents.ppo_wrapper_env import PPOEnvWrapper
+from lending_experiment.agents.ppo import PPO
+from lending_experiment.agents.pocar import POCAR
+from lending_experiment.agents.rrm import RRM
+from lending_experiment.agents.sellf import SELLF
 
 from lending_experiment.environments.resampling import (
     ResamplingEnv,
     LendingEnv,
     EnemEnv,
-    Params as ResamplingParams,
 )
+import argparse
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("Using device: ", device)
@@ -40,64 +42,114 @@ torch.cuda.empty_cache()
 
 EXP_DIR = "./experiments"
 
+ALG_PARAMS = {}
+ALG_PARAMS["ppo"] = {"learning_rate": 1e-5}
+ALG_PARAMS["sellf"] = {
+    "learning_rate": 1e-5,
+    "beta_0": 1,
+    "beta_1": 1.0,
+    "beta_2": 1.0,
+    "beta_3": 0.5,
+}
+ALG_PARAMS["pocar_full"] = {
+    "learning_rate": 1e-5,
+    "beta_0": 1,
+    "beta_1": 0.5,
+    "beta_2": 0.5,
+}
+ALG_PARAMS["pocar"] = {
+    "learning_rate": 1e-5,
+    "beta_0": 1,
+    "beta_1": 0.5,
+    "beta_1": 0.5,
+}
+ALG_PARAMS["rrm"] = {
+    "learning_rate": 1e-5,
+    "beta_0": 0.5,
+}
+
 
 def get_env(env_name: str, utility_method: str, algorithm: str) -> ResamplingEnv:
-    if algorithm == "pocar_full":
+    if algorithm in ["pocar_full", "ppo", "rrm"]:
         delta_method = "full"
-    elif algorithm == "sellf":
+    elif algorithm.find("sellf") != -1:
         delta_method = "imputation"
     else:
         delta_method = "accepted"
     if env_name == "fico":
-        params = ResamplingParams()
+        env = LendingEnv(utility_method=utility_method, delta_method=delta_method)
+    elif env_name == "fico_equal":
         env = LendingEnv(
-            params, utility_method=utility_method, delta_method=delta_method
+            utility_method=utility_method,
+            delta_method=delta_method,
+            group_ratios="equal",
         )
     elif env_name == "enem":
-        params = ResamplingParams()
-        params.num_features = 130
-        env = EnemEnv()
+        env = EnemEnv(
+            n_features=130, utility_method=utility_method, delta_method=delta_method
+        )
     return env
 
 
-def train(train_timesteps, env, save_dir, config):
+def get_alg(env, config, device):
+    if config["algorithm"] == "ppo":
+        model = PPO(
+            env=env,
+            policy_kwargs={
+                "use_predictor": config["use_predictor"],
+            },
+            device=device,
+            **config["algorithm_params"],
+        )
+    elif config["algorithm"] == "pocar" or config["algorithm"] == "pocar_full":
+        model = POCAR(
+            env=env,
+            policy_kwargs={
+                "use_predictor": config["use_predictor"],
+            },
+            omega=config["omega"],
+            device=device,
+            **config["algorithm_params"],
+        )
+    elif config["algorithm"] == "rrm":
+        model = RRM(
+            env=env,
+            policy_kwargs={
+                "use_predictor": config["use_predictor"],
+            },
+            omega=config["omega"],
+            device=device,
+            **config["algorithm_params"],
+        )
+    elif config["algorithm"].find("sellf") != -1:
+        model = SELLF(
+            env=env,
+            policy_kwargs={
+                "use_predictor": config["use_predictor"],
+            },
+            omega=config["omega"],
+            device=device,
+            **config["algorithm_params"],
+        )
 
-    # print("env_params: ", env.state.params)
+    return model
+
+
+def train(train_timesteps, env, save_dir, config):
 
     env = PPOEnvWrapper(env=env)
     env = Monitor(env)
     env = DummyVecEnv([lambda: env])
 
-    use_predictor = config["algorithm"] == "sellf"
-
-    model = PPO(
-        "MlpPolicy",
-        env,
-        policy_kwargs={
-            "use_predictor": use_predictor,
-            "activation_fn": torch.nn.ReLU,
-            "net_arch": [256, 256, dict(vf=[256, 128], pi=[256, 128])],
-        },
-        verbose=0,
-        omega=config["omega"],
-        device=device,
-        **config["algorithm_params"],
-    )
+    model = get_alg(env, config, device)
     env.env_method("set_agent", model)
 
     shutil.rmtree(save_dir, ignore_errors=True)
     Path(save_dir).mkdir(parents=True, exist_ok=True)
 
-    checkpoint_callback = CheckpointCallback(
-        save_freq=10_000, save_path=save_dir, name_prefix="rl_model"
-    )
-
     model.set_logger(configure(folder=save_dir))
-    model.learn(total_timesteps=train_timesteps, callback=checkpoint_callback)
+    model.learn(total_timesteps=train_timesteps)
     model.save(save_dir + "/final_model")
-
-    # Once we finish learning, plot the returns over time and save into the experiments directory
-    # plot_rets(EXP_DIR)
 
 
 def evaluate(env, agent, seeds, eval_dir):
@@ -108,43 +160,24 @@ def evaluate(env, agent, seeds, eval_dir):
         np.random.seed(seeds[ep])
         torch.manual_seed(seeds[ep])
 
-        # Make predictions for everyone
-        action_list = []
-        pred_list = []
-        acc = []
-        for idx in range(env.num_applicants):
-            obs = env.get_applicant_obs(idx)
-            obs = np.array(obs).reshape(1, -1)
-            action = agent.predict(obs)[0]
-            obs = torch.tensor(obs, dtype=torch.float32).to(device)
-            pred = agent.policy.predict_label(obs).item()
-            action_list.append(action)
-            pred_list.append(pred)
-            label = env.pool[idx]["label"]
-            acc.append(int(label == pred))
-        print(f"Mean accuracy: {np.mean(acc)}")
-
-        env.set_action_pred(action_list, pred_list)
+        env.update_models()
 
         obs = env.reset()
         done = False
         t = 0
         while not done:
-            action = None
-            if isinstance(agent, PPO):
-                action = agent.predict(obs)[0]
-            else:
-                action = agent.act(obs, done)
             obs = np.array(obs).reshape(1, -1)
             obs = torch.tensor(obs, dtype=torch.float32).to(device)
-            pred = agent.policy.predict_label(obs).item()
+            action = agent.policy.get_action(obs)
+            action = action.item()
+            pred = agent.policy.get_label(obs).item()
 
             # Logging
-            group_id = np.argmax(env.state.group)
+            group_id = env.data["group"][env.idx]
             # Add to loans if the agent wants to loan
-            label = env.state.label
+            label = env.data["label"][env.idx]
             obs, _, done, _ = env.step(action)
-            resource = env.state.resource
+            resource = env.resource
             eval_data.append(
                 {
                     "ep": ep,
@@ -155,8 +188,8 @@ def evaluate(env, agent, seeds, eval_dir):
                     "pred": pred,
                     "correct": int(label == pred),
                     "resource": resource,
-                    "delta": env.state.delta,
-                    "delta_real": env.state.delta_real,
+                    "delta": env.delta,
+                    "delta_obs": env.delta_obs,
                 }
             )
             t += 1
@@ -183,6 +216,7 @@ def main(config):
     )
     save_dir = f"{exp_dir}/models"
     eval_dir = f"{exp_dir}/eval"
+    config["use_predictor"] = config["algorithm"].find("sellf") != -1
     env = get_env(config["env_name"], config["mu_type"], config["algorithm"])
     train(
         train_timesteps=config["train_timesteps"],
@@ -202,11 +236,13 @@ def main(config):
     with open(eval_dir + "/seeds.txt", "w") as f:
         f.write(str(seeds))
 
-    model_path = f"{save_dir}/final_model.zip"
-    agent = PPO.load(model_path, verbose=1)
+    model_path = f"{save_dir}/final_model"
     env = get_env(config["env_name"], config["mu_type"], config["algorithm"])
     env = PPOEnvWrapper(env)
+    agent = get_alg(env, config, device)
+    agent.load(model_path)
     env.set_agent(agent)
+
     evaluate(
         env=env,
         agent=agent,
@@ -222,45 +258,21 @@ def main(config):
 
 
 if __name__ == "__main__":
-    env_name = "fico"
-    train_timesteps = 200_000
+    args = argparse.ArgumentParser()
+    # params are the env_name, the algorithm, and the mu_type
+    args.add_argument("--env_name", type=str, default="fico")
+    args.add_argument("--algorithm", type=str, default="ppo")
+    args.add_argument("--mu_type", type=str, default="accuracy")
+    args = args.parse_args()
 
-    algorithms_params = {
-        "sellf" :{
-            "ad_reg": "sellf",
-            "learning_rate": 1e-5,
-            "beta_0": 1,
-            "beta_1": 5,
-            "beta_3": 3,
-            "bound_type": "var_up",
-        },
-        "sellf1" :{
-            "ad_reg": "sellf",
-            "learning_rate": 1e-5,
-            "beta_0": 1,
-            "beta_1": 5,
-            "beta_3": 3,
-            "bound_type": "diff",
-        },
-        "sellf2" :{
-            "ad_reg": "sellf",
-            "learning_rate": 1e-5,
-            "beta_0": 1,
-            "beta_1": 5,
-            "beta_3": 3,
-            "bound_type": "var",
-        },
+    train_timesteps = 500_000
+    config = {
+        "exp_name": args.algorithm,
+        "env_name": args.env_name,
+        "algorithm": args.algorithm,
+        "train_timesteps": train_timesteps,
+        "mu_type": args.mu_type,
+        "omega": 0.05,
+        "algorithm_params": ALG_PARAMS[args.algorithm],
     }
-
-    for exp_name, algo_params in algorithms_params.items():
-        config = {
-            "exp_name" : exp_name,
-            "env_name": "fico",
-            "algorithm": "sellf",
-            "train_timesteps": train_timesteps,
-            "mu_type": "accuracy",
-            "omega": 0.05,
-            "algorithm_params": algo_params,
-        }
-
-        main(config)
+    main(config)

@@ -1,169 +1,329 @@
 import attr
-import copy
+from copy import deepcopy
 import numpy as np
 import pickle as pkl
 
+import gym
 from gym import spaces
-
-from lending_experiment.environments import core
-
-
-@attr.s
-class Params(object):
-    num_groups = attr.ib(default=2)
-    gain = attr.ib(default=0.25)
-    starting_resource = attr.ib(default=1_000.0)
-    max_resource = attr.ib(default=100_000.0)
-    num_applicants = attr.ib(default=10_000)
-    num_features = attr.ib(default=10)
+from time import time
 
 
-@attr.s(cmp=False)
-class State(object):
-    """
-    State for the resampling environment.
-    """
-
-    # features of the population
-    rng = attr.ib()
-    params = attr.ib()
-    resource = attr.ib()
-    delta = attr.ib(default=0)
-    delta_delta = attr.ib(default=0)
-    delta_real = attr.ib(default=0)
-
-    # features of the applicant
-    applicant_features = attr.ib(default=None)
-    group = attr.ib(default=None)
-    label = attr.ib(default=None)
-    pred = attr.ib(default=None)
-    idx = attr.ib(default=None)
-
-
-class ResamplingEnv(core.FairnessEnv):
+class ResamplingEnv(gym.Env):
     """
     Resampling environment to facilitate calculating metrics along individuals.
     """
 
     metadata = {"render.modes": ["human"]}
-    group_membership_var = "group"
 
-    def __init__(self, params, utility_method="accuracy", delta_method="full"):
+    def __init__(
+        self,
+        n_groups: int = 2,
+        cost: float = 0.8,
+        n_applicants: int = 10000,
+        n_features: int = 10,
+        utility_method: str = "accuracy",
+        delta_method: str = "full",
+    ):
         assert utility_method in ["accuracy", "qualification", "tpr"]
         assert delta_method in ["full", "imputation", "accepted"]
+        self.n_groups = n_groups
+        self.cost = cost
+        self.n_applicants = n_applicants
+        self.n_features = n_features
         self.utility_method = utility_method
         self.delta_method = delta_method
         self.action_space = spaces.Discrete(2)
-        self.predict_fn = lambda x: 0
 
         resource_space = spaces.Box(
             low=0.0,
-            high=params.max_resource,
+            high=100_000,
             dtype=np.float64,
             shape=(),
         )
         applicant_space = spaces.Box(
-            low=0.0, high=1.0, dtype=np.float32, shape=(params.num_features,)
+            low=0.0, high=1.0, dtype=np.float32, shape=(self.n_features,)
         )
-        group_space = spaces.MultiBinary(n=params.num_groups)
+        group_space = spaces.MultiBinary(n=self.n_groups)
 
         self.observable_state_vars = {
             "resource": resource_space,
             "applicant_features": applicant_space,
             "group": group_space,
         }
+        self.observation_space = spaces.Dict(self.observable_state_vars)
+        self.init_data = dict(
+            [
+                (col, np.zeros(self.n_applicants, dtype=np.float32))
+                for col in [
+                    "group",
+                    "features",
+                    "label",
+                    "action",
+                    "pred",
+                    "utility",
+                    "active",
+                    "utility_obs",
+                    "active_obs",
+                ]
+            ]
+        )
+        self.init_data["features"] = np.zeros((self.n_applicants, self.n_features), dtype=np.float32)
+        self.init_data["group"] = self.init_data["group"].astype(np.int32)
+        self.data = deepcopy(self.init_data)
+        self.pool_accepted = [[] for _ in range(self.n_groups)]
+        self.timestep = 0
 
-        self.init_utility_matrix = np.zeros(
-            (params.num_applicants, params.num_groups), dtype=np.float32
-        )
-        self.init_active_matrix = np.zeros(
-            (params.num_applicants, params.num_groups), dtype=np.float32
-        )
-        self.utility_matrix = np.zeros(
-            (params.num_applicants, params.num_groups), dtype=np.float32
-        )
-        self.active_matrix = np.zeros(
-            (params.num_applicants, params.num_groups), dtype=np.float32
-        )
-        self.init_utility_real_matrix = np.zeros(
-            (params.num_applicants, params.num_groups), dtype=np.float32
-        )
-        self.init_active_real_matrix = np.zeros(
-            (params.num_applicants, params.num_groups), dtype=np.float32
-        )
-        self.utility_real_matrix = np.zeros(
-            (params.num_applicants, params.num_groups), dtype=np.float32
-        )
-        self.active_real_matrix = np.zeros(
-            (params.num_applicants, params.num_groups), dtype=np.float32
-        )
-        self.init_pool = []
-        self.pool = []
-        self.load_pool(params)
-
-        super(ResamplingEnv, self).__init__(params)
+        self.get_label_pred = lambda x, g : 0
+        self.get_action = lambda x, g : 0
+        self.get_action_prob = lambda x, g : 0
+        self.get_action_prob_list = lambda x, g : 0
+        self.get_action_prob_batch = lambda x, g : 0
+        self.get_pred_batch = lambda x, g : 0
+        self.delta_obs = 0
+        self.error_bound = [0, 0]
+        self.error_accepted = [0, 0]
+        self.chi_divergence = [0, 0]
+        
+        self._load_data()
         self._state_init()
 
-    def _state_init(self, rng=None):
-        self.state = State(
-            params=copy.deepcopy(self.initial_params),
-            rng=rng or np.random.RandomState(),
-            resource=self.initial_params.starting_resource,
-        )
+    def _load_data(self):
+        """This function should fill the entries in self.init_data"""
+        return
+
+    def _state_init(self):
+        self.resource = 1_000
         self.sample_applicant()
 
-    def reset(self):
+    def sample_applicant(self):
+        selected = np.random.choice(self.n_applicants, size=1)[0]
+        self.idx = selected
+        return
+
+    def reset(self, update_models=False):
         """Resets the environment."""
         self.timestep = 0
-        self.pool = copy.deepcopy(self.init_pool)
-        self.utility_matrix = copy.deepcopy(self.init_utility_matrix)
-        self.active_matrix = copy.deepcopy(self.init_active_matrix)
-        self.utility_real_matrix = copy.deepcopy(self.init_utility_real_matrix)
-        self.active_real_matrix = copy.deepcopy(self.init_active_real_matrix)
-        self._state_init(self.state.rng)
+        if update_models:
+            self.update_models()
+        self.data = deepcopy(self.init_data)
+        self._state_init()
         self.compute_disparity()
-        return super(ResamplingEnv, self).reset()
+        return self._get_observable_state()
+
+    def update_models(self):
+        for idx in range(self.n_applicants):
+            group = self.init_data["group"][idx]
+            features = self.init_data["features"][idx]
+            label = self.init_data["label"][idx]
+            pred = self.get_label_pred(features, group)
+            action = self.get_action(features, group)
+            self.init_data["pred"][idx] = pred
+            self.init_data["action"][idx] = action
+            self.update_utility(idx, label, pred, action, init=True)
+
+        if self.delta_method == "imputation":
+            # update accepted pool
+            # Calculate "one_minus_pi" of new accepted individuals
+            for i in range(self.n_groups):
+                group = np.zeros(self.n_groups)
+                group[i] = 1
+                for j in range(len(self.pool_accepted[i])):
+                    if self.pool_accepted[i][j]["one_minus_pi"] is None:
+                        features = self.pool_accepted[i][j]["features"]
+                        prob_list = self.get_action_prob_list(features, group)
+                        self.pool_accepted[i][j]["one_minus_pi"] = np.prod(
+                            [1 - x for x in prob_list]
+                        )
+
+            # Here I need to calculate the error_bound, that is the error of the predictor plus
+            # the Chi Squared divergence term
+
+            self.error_accepted = np.zeros(self.n_groups)
+            self.chi_divergence = np.zeros(self.n_groups)
+
+            if len(self.pool_accepted[0]) == 0 or len(self.pool_accepted[1]) == 0:
+                return
+
+            for i in range(self.n_groups):
+                # Create a large dataset of accepted applicants
+                group = np.zeros(
+                    (len(self.pool_accepted[i]), self.n_groups), dtype=np.float32
+                )
+                group[:, i] = 1
+                features = np.array(
+                    [applicant["features"] for applicant in self.pool_accepted[i]]
+                )
+
+                # Calculate the error of the updated classifier on the accepted population
+                labels = np.array(
+                    [applicant["label"] for applicant in self.pool_accepted[i]]
+                )
+                preds = self.get_pred_batch(features, group)
+                self.error_accepted[i] = (preds - labels).mean()
+
+                # Calculate the chi_divergence
+                one_minus_pi = self.get_action_prob_batch(features, group)
+                one_minus_pi_hist = np.array(
+                    [applicant["one_minus_pi"] for applicant in self.pool_accepted[i]]
+                )
+                one_minus_pi_hist *= one_minus_pi
+
+                # Save new one_minus_pi_hist
+                for j in range(len(self.pool_accepted[i])):
+                    self.pool_accepted[i][j]["one_minus_pi"] = one_minus_pi_hist[j]
+
+                one_minus_pi_hist = 1 - one_minus_pi_hist
+                q = one_minus_pi_hist.mean()
+                r = one_minus_pi.mean()
+
+                w = (q / r) * (one_minus_pi / one_minus_pi_hist)
+
+                self.chi_divergence[i] = np.mean((w - 1) ** 2)
+
+            self.error_bound = self.error_accepted + self.chi_divergence
+
+    def compute_disparity(self):
+        # calculate disparity using self.data
+        self.data["utility"] *= self.data[
+            "active"
+        ]  # make utility of "inactive" be equal to 0
+
+        self.group_counts = np.array(
+            [
+                np.sum(self.data["active"][self.data["group"] == i])
+                for i in range(self.n_groups)
+            ]
+        )
+        self.utility_sum = np.array(
+            [
+                np.sum(self.data["utility"][self.data["group"] == i])
+                for i in range(self.n_groups)
+            ]
+        )
+
+        self.utility_values = np.true_divide(
+            self.utility_sum,
+            self.group_counts,
+            where=self.group_counts != 0,
+            out=np.zeros_like(self.utility_sum),
+        )
+        old_delta = self.delta_obs
+        self.delta = abs(self.utility_values[1] - self.utility_values[0])
+        self.delta_obs = self.delta
+        self.delta_delta = self.delta_obs - old_delta
+        self.delta_pred = 0
+
+        if self.delta_method == "accepted" or self.delta_method == "imputation":
+            self.data["utility_obs"] *= self.data["active_obs"]
+            self.group_counts_obs = np.array(
+                [
+                    np.sum(self.data["active_obs"][self.data["group"] == i])
+                    for i in range(self.n_groups)
+                ]
+            )
+            self.utility_sum_obs = np.array(
+                [
+                    np.sum(self.data["utility_obs"][self.data["group"] == i])
+                    for i in range(self.n_groups)
+                ]
+            )
+            self.utility_values_obs = np.true_divide(
+                self.utility_sum_obs,
+                self.group_counts_obs,
+                where=self.group_counts_obs != 0,
+                out=np.zeros_like(self.utility_sum_obs),
+            )
+            self.delta_obs = abs(
+                self.utility_values_obs[1] - self.utility_values_obs[0]
+            )
+
+        if self.delta_method == "imputation":
+            # calculate other necessary delta values
+            group_counts = np.array(
+                [np.sum(self.data["group"] == i) for i in range(self.n_groups)]
+            )
+            accept_sum = np.array(
+                [
+                    np.sum(self.data["action"][self.data["group"] == i])
+                    for i in range(self.n_groups)
+                ]
+            )
+            accept_rate = np.true_divide(
+                accept_sum,
+                group_counts,
+                where=group_counts != 0,
+                out=np.zeros_like(accept_sum),
+            )
+
+            pred_sum = np.array(
+                [
+                    np.sum(self.data["pred"][self.data["group"] == i])
+                    for i in range(self.n_groups)
+                ]
+            )
+            pred_rate = np.true_divide(
+                pred_sum,
+                group_counts,
+                where=group_counts != 0,
+                out=np.zeros_like(pred_sum),
+            )
+
+            # here, the error bound will already be calculated
+            delta_pred = np.zeros(self.n_groups)
+            if self.utility_method in ["qualification", "accuracy"]:
+                delta_pred = self.error_bound * (1 - accept_rate)
+            else:
+                delta_pred = self.error_bound * (1 - accept_rate) / pred_rate
+
+            self.delta_pred = abs(delta_pred[1] - delta_pred[0])
+
+    def _get_observable_state(self):
+        group = np.zeros(self.n_groups, dtype = np.float32)
+        group[int(self.data["group"][self.idx])] = 1
+        return {
+            "resource": np.array(self.resource),
+            "applicant_features": np.array(self.data["features"][self.idx]),
+            "group": group,
+        }
 
     def _is_done(self):
-        return self.state.resource <= 0 or self.timestep >= 10_000
+        return self.resource <= 0 or self.timestep >= 10_000
 
-    def _step_impl(self, state, action):
+    def step(self, action):
         self.timestep += 1
-        self.update_resource(self.state, action)
-        self.update_utility(
-            self.state.idx,
-            self.state.label,
-            self.state.pred,
-            np.argmax(self.state.group),
-            action,
-            init=False,
-        )
+        old_resource = self.resource
+        group = self.data["group"][self.idx]
+        features = self.data["features"][self.idx]
+        label = self.data["label"][self.idx]
+        pred = self.data["pred"][self.idx]
+
+        if action == 1 and len(self.pool_accepted[group]) < 20_000:
+            self.pool_accepted[group].append(
+                {
+                    "features": features,
+                    "label": label,
+                    "one_minus_pi": None,
+                }
+            )
+        self.update_resource(action, label)
+        # Update utility based on this action for this applicant
+        self.update_utility(self.idx, label, pred, action)
+        # Update resource with action
         self.compute_disparity()
-        self.update_applicant(self.state, action)
+        # Update features of applicant based on action
+        self.update_applicant(self.idx, action)
         self.sample_applicant()
-        return self.state
+        observation = self._get_observable_state()
+        reward = self.resource - old_resource
+        return observation, reward, self._is_done(), {}
 
-    def load_pool(self, params):
-        """Load the pool of applicants."""
-        # Implement logic to load the pool of applicants based on params
-        pass
-
-    def update_resource(self, state, action):
-        params = state.params
+    def update_resource(self, action, label):
         if action == 0:  # reject
             return
-        if state.label == 1:
-            state.resource += params.gain
-        else:
-            state.resource -= 1
+        self.resource += label - self.cost
+        self.resource = max(0, self.resource)
 
-        state.resource = max(0, state.resource)
-
-    def update_applicant(self, state, action):
-        # Implement logic to update the applicant based on the action taken
-        pass
-
-    def update_utility(self, idx, label, pred, group_idx, action, init=False):
+    def update_utility(self, idx, label, pred, action, init=False):
         """Update the difference in utility for the current applicant. Also updates the utility in the pool."""
         # First, calculate real utility
         active = 1
@@ -175,101 +335,47 @@ class ResamplingEnv(core.FairnessEnv):
             utility_value = action
             active = 1 if label == 1 else 0
 
-        if init:
-            self.init_utility_real_matrix[idx, group_idx] = utility_value
-            self.init_active_real_matrix[idx, group_idx] = active
-        else:
-            self.utility_real_matrix[idx, group_idx] = utility_value
-            self.active_real_matrix[idx, group_idx] = active
+        utility_obs = utility_value
+        active_obs = active
+        if self.delta_method == "accepted":
+            utility_obs = utility_value
+            active_obs = active if action == 1 else 0
 
-        if self.delta_method == "full":
-            pass  # Full delta is already calculated in the utility_real_matrix
-        elif self.delta_method == "imputation":
-            label = label if action == 1 else pred
+        if self.delta_method == "imputation":
+            active_obs = 1
+            label_obs = label if action == 1 else pred
             if self.utility_method == "accuracy":
-                utility_value = 1 if label == action else 0
-                active = 1
+                utility_obs = 1 if label_obs == action else 0
             elif self.utility_method == "qualification":
-                utility_value = label
-                active = 1
+                utility_obs = label_obs
             elif self.utility_method == "tpr":
-                utility_value = action
-                active = 1 if label == 1 else 0
-        elif self.delta_method == "accepted":
-            label = label
-            if self.utility_method == "accuracy":
-                utility_value = 1 if label == action else 0
-                active = 1 if action else 0
-            elif self.utility_method == "qualification":
-                utility_value = label
-                active = 1 if action else 0
-            elif self.utility_method == "tpr":
-                utility_value = action
-                active = 1 if action * label == 1 else 0
+                utility_obs = action
+                active_obs = 1 if label_obs == 1 else 0
 
-        if init:
-            self.init_utility_matrix[idx, group_idx] = utility_value
-            self.init_active_matrix[idx, group_idx] = active
-        else:
-            self.utility_matrix[idx, group_idx] = utility_value
-            self.active_matrix[idx, group_idx] = active
+        data_to_change = self.init_data if init else self.data
+        data_to_change["utility"][idx] = utility_value
+        data_to_change["active"][idx] = active
+        data_to_change["utility_obs"][idx] = utility_obs
+        data_to_change["active_obs"][idx] = active_obs
 
-    def compute_disparity(self):
-        # Multiplity utility by active matrix
-        self.utility_matrix *= self.active_matrix
-        self.utility_real_matrix *= self.active_real_matrix
+    def update_applicant(self, idx, action):
+        # Implement logic to update the applicant based on the action taken
+        features = self.data["features"][idx]
+        label = self.data["label"][idx]
+        features = self.update_features(features, action, label)
+        self.data["features"][idx] = features
 
-        # First, calculate real utility
-        cur_util = np.sum(self.utility_real_matrix, axis=0)
-        group_counts = np.sum(self.active_real_matrix, axis=0)
-        cur_util = np.divide(
-            cur_util,
-            group_counts,
-            out=np.zeros_like(cur_util),
-            where=group_counts != 0,
-        )
-        self.state.delta_real = np.max(cur_util) - np.min(cur_util)
+        group = self.data["group"][idx]
+        label = self.get_label(features, group)
+        pred = self.get_label_pred(features, group)
+        action = self.get_action(features, group)
+        self.data["label"][idx] = label
+        self.data["pred"][idx] = pred
+        self.data["action"][idx] = action
 
-        # Then, calculate utility
-        cur_util = np.sum(self.utility_matrix, axis=0)
-        group_counts = np.sum(self.active_matrix, axis=0)
-        cur_delta = self.state.delta
-        cur_util = np.divide(
-            cur_util,
-            group_counts,
-            out=np.zeros_like(cur_util),
-            where=group_counts != 0,
-        )
-        self.state.delta = np.max(cur_util) - np.min(cur_util)
-        self.state.delta_delta = self.state.delta - cur_delta
 
-    def sample_applicant(self):
-        selected = np.random.choice(len(self.pool), size=1)[0]
-        applicant = self.pool[selected]
-        self.state.applicant_features = applicant["features"]
-        self.state.group = applicant["group"]
-        self.state.label = applicant["label"]
-        self.state.pred = applicant["pred"]
-        self.state.idx = selected
-        return
-
-    def set_action_pred(self, list_action, list_pred):
-        self.init_active_matrix *= 0
-        self.init_utility_matrix *= 0
-        self.init_active_real_matrix *= 0
-        self.init_utility_real_matrix *= 0
-        for idx, (action, pred) in enumerate(zip(list_action, list_pred)):
-            label = self.pool[idx]["label"]
-            group_idx = self.pool[idx]["group"].argmax()
-            self.pool[idx]["pred"] = pred
-            self.update_utility(idx, label, pred, group_idx, action, init=True)
-
-        self.utility_matrix = copy.deepcopy(self.init_utility_matrix)
-        self.active_matrix = copy.deepcopy(self.init_active_matrix)
-        self.utility_real_matrix = copy.deepcopy(self.init_utility_real_matrix)
-        self.active_real_matrix = copy.deepcopy(self.init_active_real_matrix)
-
-        self.compute_disparity()
+    def update_features(self, features, action):
+        return features
 
 
 class LendingEnv(ResamplingEnv):
@@ -277,75 +383,92 @@ class LendingEnv(ResamplingEnv):
     Environment for lending experiments.
     """
 
-    def load_pool(self, params):
+    def __init__(
+        self,
+        cost: float = 0.8,
+        n_applicants: int = 10000,
+        utility_method: str = "accuracy",
+        delta_method: str = "full",
+        group_ratios: str = "data",
+    ):
+        assert group_ratios in ["data", "equal"]
+        self.n_groups = 2
+        self.cost = cost
+        self.n_applicants = n_applicants
+        self.n_features = 10
+        self.utility_method = utility_method
+        self.delta_method = delta_method
+        self.group_ratios = group_ratios
+        super().__init__(
+            n_groups=self.n_groups,
+            cost=self.cost,
+            n_applicants=self.n_applicants,
+            n_features=self.n_features,
+            utility_method=self.utility_method,
+            delta_method=self.delta_method,
+        )
+
+    def _load_data(self):
         with open("data/fico.pkl", "rb") as f:
             data = pkl.load(f)
-        groups_probs = data["group_likelihoods"]
+        if self.group_ratios == "data":
+            groups_probs = data["group_likelihoods"]
+        else:
+            groups_probs = [0.5, 0.5]
         cluster_probs = data["cluster_probabilities"]
         success_probs = data["success_probabilities"]
 
-        def sample_label(g, x):
+        def sample_label(x, g):
+            # if x is not an scalar, get the argmax
+            if not np.isscalar(x):
+                x = np.argmax(x)
             return np.random.binomial(n=1, p=success_probs[g][x])
 
-        self.label_fn = sample_label
+        self.get_label = sample_label
 
         num_groups = len(groups_probs)
         num_features = len(cluster_probs[0])
 
-        for i in range(params.num_applicants):
+        for i in range(self.n_applicants):
             g = np.random.choice(num_groups, p=groups_probs)
             x = np.random.choice(num_features, p=cluster_probs[g])
-            y = self.label_fn(g, x)
+            label = self.get_label(x, g)
             # one hot encode group and x
             features = np.zeros(num_features, dtype=np.float32)
             features[x] = 1
             group = np.zeros(num_groups, dtype=np.float32)
             group[g] = 1
+            pred = self.get_label_pred(features, group)
+            action = self.get_action(features, group)
+            self.init_data["group"][i] = g
+            self.init_data["features"][i] = features
+            self.init_data["label"][i] = label
+            self.init_data["pred"][i] = pred
+            self.init_data["action"][i] = action
+    
 
-            self.init_pool.append(
-                {
-                    "features": features,
-                    "group": group,
-                    "label": y,
-                    "pred": None,
-                }
-            )
-        
-        self.pool = copy.deepcopy(self.init_pool)
-
-    def update_applicant(self, state, action):
+    def update_features(self, features, action, label):
         if action == 0:
-            return
+            return features
 
-        idx = state.idx
-        score = np.argmax(state.applicant_features)
-        num_features = len(state.applicant_features)
-        if state.label == 1:
+        score = np.argmax(features)
+        num_features = len(features)
+        if label == 1:
             new_score = min(score + 1, num_features - 1)
-        elif state.label == 0:
+        elif label == 0:
             new_score = max(score - 1, 0)
-
-        self.pool[idx]["features"][score] = 0
-        self.pool[idx]["features"][new_score] = 1
-        state.applicant_features = self.pool[idx]["features"]
-
-        group = np.argmax(state.group)
-        y = self.label_fn(group, new_score)
-        self.pool[idx]["label"] = y
-        state.label = y
-
-        pred = self.predict_fn(self.pool[idx])
-        self.pool[idx]["pred"] = pred
-        state.pred = pred
+        features[score] = 0
+        features[new_score] = 1
+        return features
 
 class EnemEnv(ResamplingEnv):
     """
     Environment for school admission experiments.
     """
 
-    def load_pool(self, params):
+    def _load_data(self):
         with open("data/enem_pool.pkl", "rb") as f:
-            self.init_pool = pkl.load(f)
+            self.init_data = pkl.load(f)
 
         with open("data/enem_model.pkl", "rb") as f:
             self.model = pkl.load(f)
@@ -355,30 +478,18 @@ class EnemEnv(ResamplingEnv):
             return 1 if np.random.rand() < p else 0
 
         self.label_fn = sample_label
-        self.pool = copy.deepcopy(self.init_pool)
 
-    def updated_applicant(self, state, action):
+    def updated_features(self, features, action, label):
         if action == 1:
             return
         age_groups = 6
-        idx = state.idx
-        features = state.applicant_features
-        group = np.argmax(state.group)
-        age_features = features[(age_groups * group):(age_groups * (group + 1))]
+        age_argmax = np.argmax(features)
+        group = 1 if age_argmax >= age_groups else 0
+        age_features = features[(age_groups * group) : (age_groups * (group + 1))]
         age = np.argmax(age_features)
         new_age = min(age + 1, age_groups - 1)
 
         new_features = features.copy()
         new_features[int(age_groups * group + age)] = 0
         new_features[int(age_groups * group + new_age)] = 1
-
-        self.pool[idx]["features"] = new_features
-        state.applicant_features = new_features
-
-        label = self.label_fn(group, new_age)
-        self.pool[idx]["label"] = label
-        state.label = label
-
-        pred = self.predict_fn(self.pool[idx])
-        self.pool[idx]["pred"] = pred
-        state.pred = pred
+        return new_features
