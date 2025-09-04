@@ -374,7 +374,7 @@ class ResamplingEnv(gym.Env):
         self.data["action"][idx] = action
 
 
-    def update_features(self, features, action):
+    def update_features(self, features, action, label):
         return features
 
 
@@ -465,31 +465,63 @@ class EnemEnv(ResamplingEnv):
     """
     Environment for school admission experiments.
     """
+    def __init__(
+        self,
+        cost: float = 0.5,
+        n_applicants: int = 10000,
+        utility_method: str = "accuracy",
+        delta_method: str = "full",
+    ):
+        super().__init__(
+            n_groups=2,
+            n_features=132,
+            cost=cost,
+            n_applicants=n_applicants,
+            utility_method=utility_method,
+            delta_method=delta_method,
+        )
 
     def _load_data(self):
         with open("data/enem_pool.pkl", "rb") as f:
-            self.init_data = pkl.load(f)
+            pool = pkl.load(f)
 
         with open("data/enem_model.pkl", "rb") as f:
             self.model = pkl.load(f)
 
-        def sample_label(x):
+        def sample_label(x, g):
+            if not np.isscalar(g):
+                g = np.argmax(g)
+            x = np.array([x[0], g, *x[1:]])
             p = self.model.predict_proba(x.reshape(1, -1))[0, 1]
             return 1 if np.random.rand() < p else 0
 
-        self.label_fn = sample_label
+        self.get_label = sample_label
 
-    def updated_features(self, features, action, label):
-        if action == 1:
-            return
+        for i in range(self.n_applicants):
+            group = pool[i]["group"]
+            features = pool[i]["features"]
+
+            label = self.get_label(features, group)
+            pred = self.get_label_pred(features, group)
+            action = self.get_action(features, group)
+            self.init_data["group"][i] = group
+            self.init_data["features"][i] = features
+            self.init_data["label"][i] = label
+            self.init_data["pred"][i] = pred
+            self.init_data["action"][i] = action
+
+    def update_features(self, features, action, label):
+        if action == 1 or features[0] == 1:
+            # add marker that already passed
+            features[0] = 1
+            return features
+
+        group = np.argmax(features[1:3])
         age_groups = 6
-        age_argmax = np.argmax(features)
-        group = 1 if age_argmax >= age_groups else 0
-        age_features = features[(age_groups * group) : (age_groups * (group + 1))]
-        age = np.argmax(age_features)
+        age = np.argmax(features[(age_groups * group + 3) : (age_groups * (group + 1) + 3)])
         new_age = min(age + 1, age_groups - 1)
 
         new_features = features.copy()
-        new_features[int(age_groups * group + age)] = 0
-        new_features[int(age_groups * group + new_age)] = 1
+        new_features[age_groups * group + 3 : age_groups * (group + 1) + 3] = 0
+        new_features[age_groups * group + new_age + 3] = 1
         return new_features

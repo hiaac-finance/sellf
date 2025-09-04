@@ -86,7 +86,7 @@ def get_env(env_name: str, utility_method: str, algorithm: str) -> ResamplingEnv
         )
     elif env_name == "enem":
         env = EnemEnv(
-            n_features=130, utility_method=utility_method, delta_method=delta_method
+            utility_method=utility_method, delta_method=delta_method
         )
     return env
 
