@@ -23,9 +23,11 @@ class ResamplingEnv(gym.Env):
         n_features: int = 10,
         utility_method: str = "accuracy",
         delta_method: str = "full",
+        bound_type: str = "chi_divergence",
     ):
         assert utility_method in ["accuracy", "qualification", "tpr"]
         assert delta_method in ["full", "imputation", "accepted"]
+        assert bound_type in ["chi_divergence", "renyi_divergence"]
         self.n_groups = n_groups
         self.cost = cost
         self.n_applicants = n_applicants
@@ -33,6 +35,7 @@ class ResamplingEnv(gym.Env):
         self.utility_method = utility_method
         self.delta_method = delta_method
         self.action_space = spaces.Discrete(2)
+        self.bound_type = bound_type
 
         resource_space = spaces.Box(
             low=0.0,
@@ -121,7 +124,7 @@ class ResamplingEnv(gym.Env):
             self.init_data["action"][idx] = action
             self.update_utility(idx, label, pred, action, init=True)
 
-        if self.delta_method == "imputation":
+        if self.delta_method == "imputation" and self.bound_type == "chi_divergence":
             # update accepted pool
             # Calculate "one_minus_pi" of new accepted individuals
             for i in range(self.n_groups):
@@ -162,7 +165,7 @@ class ResamplingEnv(gym.Env):
                 self.error_accepted[i] = (preds - labels).mean()
 
                 # Calculate the chi_divergence
-                one_minus_pi = self.get_action_prob_batch(features, group)
+                one_minus_pi = 1 - self.get_action_prob_batch(features, group)
                 one_minus_pi_hist = np.array(
                     [applicant["one_minus_pi"] for applicant in self.pool_accepted[i]]
                 )
@@ -181,6 +184,80 @@ class ResamplingEnv(gym.Env):
                 self.chi_divergence[i] = np.mean((w - 1) ** 2)
 
             self.error_bound = self.error_accepted + self.chi_divergence
+
+
+        if self.delta_method == "imputation" and self.bound_type == "renyi_divergence":
+            # update accepted pool
+            # Calculate "one_minus_pi" of new accepted individuals
+            for i in range(self.n_groups):
+                group = np.zeros(self.n_groups)
+                group[i] = 1
+                for j in range(len(self.pool_accepted[i])):
+                    if self.pool_accepted[i][j]["one_minus_pi"] is None:
+                        features = self.pool_accepted[i][j]["features"]
+                        prob_list = self.get_action_prob_list(features, group)
+                        self.pool_accepted[i][j]["one_minus_pi"] = np.prod(
+                            [1 - x for x in prob_list]
+                        )
+
+            # Here I need to calculate the error_bound, that is the error of the predictor plus
+            # the Chi Squared divergence term
+
+            self.error_accepted = np.zeros(self.n_groups)
+            self.chi_divergence = np.zeros(self.n_groups)
+
+            if len(self.pool_accepted[0]) == 0 or len(self.pool_accepted[1]) == 0:
+                return
+
+            for i in range(self.n_groups):
+                # Create a large dataset of accepted applicants
+                group = np.zeros(
+                    (len(self.pool_accepted[i]), self.n_groups), dtype=np.float32
+                )
+                group[:, i] = 1
+                features = np.array(
+                    [applicant["features"] for applicant in self.pool_accepted[i]]
+                )
+
+                # Calculate the error of the updated classifier on the accepted population
+                labels = np.array(
+                    [applicant["label"] for applicant in self.pool_accepted[i]]
+                )
+
+                # Calculate the weights
+                one_minus_pi = 1 - self.get_action_prob_batch(features, group)
+                one_minus_pi_hist = np.array(
+                    [applicant["one_minus_pi"] for applicant in self.pool_accepted[i]]
+                )
+                one_minus_pi_hist *= one_minus_pi
+                # Save new one_minus_pi_hist
+                for j in range(len(self.pool_accepted[i])):
+                    self.pool_accepted[i][j]["one_minus_pi"] = one_minus_pi_hist[j]
+
+                one_minus_pi_hist = 1 - one_minus_pi_hist
+
+                weights = (one_minus_pi / one_minus_pi_hist)
+
+                print(f"Weights stats: {weights.mean():.2f} , {weights.max():.2f}")
+                
+                preds = self.get_pred_batch(features, group)
+                self.error_accepted[i] = (weights * (preds - labels)).mean()
+
+                renyi_div = np.mean((one_minus_pi / one_minus_pi_hist)**2)
+
+                # calculate complexity term
+                delta = 0.95
+                m = len(one_minus_pi)
+                p = self.n_features
+                C = np.sqrt((p * np.log(2 * m * np.e / p) + np.log(4/ delta)) / m)
+                C *= np.power(renyi_div, 3/8)
+                C *= 2**(5/4)
+
+                print(f"Renyi div: {renyi_div:.2f}, C: {C:.4f}")
+                self.chi_divergence[i] = C
+
+            self.error_bound = self.error_accepted + self.chi_divergence
+
 
     def compute_disparity(self):
         # calculate disparity using self.data
@@ -297,7 +374,7 @@ class ResamplingEnv(gym.Env):
         label = self.data["label"][self.idx]
         pred = self.data["pred"][self.idx]
 
-        if action == 1 and len(self.pool_accepted[group]) < 20_000:
+        if action == 1 and len(self.pool_accepted[group]) < 50_000:
             self.pool_accepted[group].append(
                 {
                     "features": features,

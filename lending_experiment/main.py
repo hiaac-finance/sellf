@@ -51,6 +51,13 @@ ALG_PARAMS["sellf"] = {
     "beta_2": 1.0,
     "beta_3": 0.5,
 }
+ALG_PARAMS["sellf_renyi"] = {
+    "learning_rate": 1e-5,
+    "beta_0": 1,
+    "beta_1": 1.0,
+    "beta_2": 1.0,
+    "beta_3": 0.5,
+}
 ALG_PARAMS["pocar_full"] = {
     "learning_rate": 1e-5,
     "beta_0": 1,
@@ -218,6 +225,8 @@ def main(config):
     eval_dir = f"{exp_dir}/eval"
     config["use_predictor"] = config["algorithm"].find("sellf") != -1
     env = get_env(config["env_name"], config["mu_type"], config["algorithm"])
+    if "renyi" in config["algorithm"]:
+        env.bound_type = "renyi_divergence"
     train(
         train_timesteps=config["train_timesteps"],
         env=env,
