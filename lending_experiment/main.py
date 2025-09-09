@@ -42,38 +42,6 @@ torch.cuda.empty_cache()
 
 EXP_DIR = "./experiments"
 
-ALG_PARAMS = {}
-ALG_PARAMS["ppo"] = {"learning_rate": 1e-5}
-ALG_PARAMS["sellf"] = {
-    "learning_rate": 1e-5,
-    "beta_0": 1,
-    "beta_1": 1.0,
-    "beta_2": 1.0,
-    "beta_3": 0.5,
-}
-ALG_PARAMS["sellf_renyi"] = {
-    "learning_rate": 1e-5,
-    "beta_0": 1,
-    "beta_1": 1.0,
-    "beta_2": 1.0,
-    "beta_3": 0.5,
-}
-ALG_PARAMS["pocar_full"] = {
-    "learning_rate": 1e-5,
-    "beta_0": 1,
-    "beta_1": 0.5,
-    "beta_2": 0.5,
-}
-ALG_PARAMS["pocar"] = {
-    "learning_rate": 1e-5,
-    "beta_0": 1,
-    "beta_1": 0.5,
-    "beta_1": 0.5,
-}
-ALG_PARAMS["rrm"] = {
-    "learning_rate": 1e-5,
-    "beta_0": 0.5,
-}
 
 
 def get_env(env_name: str, utility_method: str, algorithm: str) -> ResamplingEnv:
@@ -292,9 +260,10 @@ if __name__ == "__main__":
         "beta_1": args.beta_1,
         "beta_2": args.beta_2,
     }
-    train_timesteps = 5_000
+    train_timesteps = 500_000
+    exp_name = args.algorithm + f"_b1_{args.beta_1}_b2_{args.beta_2}"
     config = {
-        "exp_name": args.algorithm,
+        "exp_name": exp_name,
         "env_name": args.env_name,
         "algorithm": args.algorithm,
         "train_timesteps": train_timesteps,
