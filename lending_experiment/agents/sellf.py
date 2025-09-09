@@ -20,7 +20,7 @@ class SELLF(OnPolicyAlgorithm):
     def __init__(
         self,
         env: Union[gym.Env, VecEnv],
-        learning_rate: float = 3e-4,
+        learning_rate: float = 1e-5,
         beta_0: float = 1,
         beta_1: float = 0.5,
         beta_2: float = 0.5,
@@ -40,6 +40,7 @@ class SELLF(OnPolicyAlgorithm):
         policy_kwargs: Optional[Dict[str, Any]] = None,
         seed: Optional[int] = None,
         device: Union[th.device, str] = "auto",
+        **kwargs,
     ):
 
         super(SELLF, self).__init__(

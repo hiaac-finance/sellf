@@ -20,7 +20,7 @@ class POCAR(OnPolicyAlgorithm):
     def __init__(
         self,
         env: Union[gym.Env, VecEnv],
-        learning_rate: float = 3e-4,
+        learning_rate: float = 1e-5,
         beta_0: float = 1,
         beta_1: float = 0.5,
         beta_2: float = 0.5,
@@ -32,13 +32,14 @@ class POCAR(OnPolicyAlgorithm):
         gae_lambda: float = 0.95,
         clip_range: float = 0.2,
         normalize_advantage: bool = True,
-        ent_coef: float = 0.2,
+        ent_coef: float = 0.0,
         vf_coef: float = 0.5,
         max_grad_norm: float = 0.5,
         target_kl: Optional[float] = None,
         policy_kwargs: Optional[Dict[str, Any]] = None,
         seed: Optional[int] = None,
         device: Union[th.device, str] = "auto",
+        **kwargs,
     ):
 
         super(POCAR, self).__init__(
@@ -262,6 +263,7 @@ class POCAR(OnPolicyAlgorithm):
         self.logger.record("train/accept_g1", accept_rate[1])
         self.logger.record("train/delta", self.rollout_buffer.deltas.mean().item())
         self.logger.record("train/delta_obs", self.rollout_buffer.delta_obs.mean().item())
+        self.logger.record("train/delta_delta", self.rollout_buffer.delta_deltas.mean().item())
         self.logger.record("train/accuracy", accuracy)
 
         if hasattr(self.policy, "log_std"):

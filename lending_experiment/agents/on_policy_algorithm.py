@@ -49,6 +49,7 @@ class OnPolicyAlgorithm:
         self._last_episode_starts = None
         self.seed = seed
         self.policy_kwargs = policy_kwargs
+        self.set_random_seed(seed)
 
     def set_random_seed(self, seed: Optional[int]) -> None:
         if seed is None:

@@ -20,7 +20,7 @@ class PPO(OnPolicyAlgorithm):
     def __init__(
         self,
         env: Union[gym.Env, VecEnv],
-        learning_rate: float = 3e-4,
+        learning_rate: float = 1e-5,
         n_steps: int = 2048,
         batch_size: int = 64,
         n_epochs: int = 10,
@@ -35,6 +35,7 @@ class PPO(OnPolicyAlgorithm):
         policy_kwargs: Optional[Dict[str, Any]] = None,
         seed: Optional[int] = None,
         device: Union[th.device, str] = "auto",
+        **kwargs,
     ):
 
         super(PPO, self).__init__(

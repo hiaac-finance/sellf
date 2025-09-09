@@ -1,4 +1,3 @@
-import warnings
 from typing import Any, Dict, Optional, Type, Union
 
 import numpy as np
@@ -6,11 +5,8 @@ import torch
 import torch as th
 import gym
 from gym import spaces
-from torch.nn import functional as F
-import time
 
 from stable_baselines3.common.vec_env import VecEnv
-from stable_baselines3.common.utils import explained_variance
 
 
 from lending_experiment.agents.on_policy_algorithm import OnPolicyAlgorithm
@@ -20,15 +16,16 @@ class RRM(OnPolicyAlgorithm):
     def __init__(
         self,
         env: Union[gym.Env, VecEnv],
-        learning_rate: float = 3e-4,
+        learning_rate: float = 1e-5,
         n_steps: int = 2048,
         batch_size: int = 64,
         n_epochs: int = 10,
-        beta_0: float = 0.5,
+        beta_1: float = 0.5,
         omega: float = 0.1,
         policy_kwargs: Optional[Dict[str, Any]] = None,
         seed: Optional[int] = None,
         device: Union[th.device, str] = "auto",
+        **kwargs,
     ):
 
         super(RRM, self).__init__(
@@ -49,7 +46,7 @@ class RRM(OnPolicyAlgorithm):
 
         self.batch_size = batch_size
         self.n_epochs = n_epochs
-        self.beta_0 = beta_0
+        self.beta_1 = beta_1
 
         self._setup_model()
 
@@ -109,7 +106,7 @@ class RRM(OnPolicyAlgorithm):
                 )
                 weights = (self.cost) * (labels) + (1 - self.cost) * (1 - labels)
                 loss *= weights
-                loss = loss.mean() + self.beta_0 * fairness_cost
+                loss = loss.mean() + self.beta_1 * fairness_cost
 
                 self.policy.optimizer.zero_grad()
                 loss.backward()

@@ -24,6 +24,8 @@ class ResamplingEnv(gym.Env):
         utility_method: str = "accuracy",
         delta_method: str = "full",
         bound_type: str = "chi_divergence",
+        use_max_delta: bool = False,
+        seed = None,
     ):
         assert utility_method in ["accuracy", "qualification", "tpr"]
         assert delta_method in ["full", "imputation", "accepted"]
@@ -86,9 +88,14 @@ class ResamplingEnv(gym.Env):
         self.error_bound = [0, 0]
         self.error_accepted = [0, 0]
         self.chi_divergence = [0, 0]
-        
+        self.seed(seed)
         self._load_data()
         self._state_init()
+        
+
+    def seed(self, seed=None):
+        np.random.seed(seed)
+        return [seed]
 
     def _load_data(self):
         """This function should fill the entries in self.init_data"""
@@ -103,11 +110,9 @@ class ResamplingEnv(gym.Env):
         self.idx = selected
         return
 
-    def reset(self, update_models=False):
+    def reset(self):
         """Resets the environment."""
         self.timestep = 0
-        if update_models:
-            self.update_models()
         self.data = deepcopy(self.init_data)
         self._state_init()
         self.compute_disparity()
@@ -467,6 +472,7 @@ class LendingEnv(ResamplingEnv):
         utility_method: str = "accuracy",
         delta_method: str = "full",
         group_ratios: str = "data",
+        seed = None,
     ):
         assert group_ratios in ["data", "equal"]
         self.n_groups = 2
@@ -483,6 +489,7 @@ class LendingEnv(ResamplingEnv):
             n_features=self.n_features,
             utility_method=self.utility_method,
             delta_method=self.delta_method,
+            seed = seed,
         )
 
     def _load_data(self):
@@ -548,6 +555,7 @@ class EnemEnv(ResamplingEnv):
         n_applicants: int = 10000,
         utility_method: str = "accuracy",
         delta_method: str = "full",
+        seed = None,
     ):
         super().__init__(
             n_groups=2,
@@ -556,6 +564,7 @@ class EnemEnv(ResamplingEnv):
             n_applicants=n_applicants,
             utility_method=utility_method,
             delta_method=delta_method,
+            seed = seed,
         )
 
     def _load_data(self):

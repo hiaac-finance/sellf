@@ -84,17 +84,19 @@ def get_env(env_name: str, utility_method: str, algorithm: str) -> ResamplingEnv
     else:
         delta_method = "accepted"
     if env_name == "fico":
-        env = LendingEnv(utility_method=utility_method, delta_method=delta_method)
+        env = LendingEnv(
+            utility_method=utility_method, delta_method=delta_method, seed=0
+        )
     elif env_name == "fico_equal":
         env = LendingEnv(
             utility_method=utility_method,
             delta_method=delta_method,
             group_ratios="equal",
+            n_applicants=4_000,
+            seed=0,
         )
     elif env_name == "enem":
-        env = EnemEnv(
-            utility_method=utility_method, delta_method=delta_method
-        )
+        env = EnemEnv(utility_method=utility_method, delta_method=delta_method, seed=0)
     return env
 
 
@@ -149,6 +151,7 @@ def train(train_timesteps, env, save_dir, config):
     env = DummyVecEnv([lambda: env])
 
     model = get_alg(env, config, device)
+    model.set_random_seed(0)
     env.env_method("set_agent", model)
 
     shutil.rmtree(save_dir, ignore_errors=True)
@@ -166,9 +169,9 @@ def evaluate(env, agent, seeds, eval_dir):
         random.seed(seeds[ep])
         np.random.seed(seeds[ep])
         torch.manual_seed(seeds[ep])
+        env.seed(seeds[ep])
 
         env.update_models()
-
         obs = env.reset()
         done = False
         t = 0
@@ -227,6 +230,14 @@ def main(config):
     env = get_env(config["env_name"], config["mu_type"], config["algorithm"])
     if "renyi" in config["algorithm"]:
         env.bound_type = "renyi_divergence"
+    if config["algorithm"] == "sellf_renyi_v2":
+        env.use_max_delta = True
+
+    # set seeds
+    random.seed(0)
+    np.random.seed(0)
+    torch.manual_seed(0)
+
     train(
         train_timesteps=config["train_timesteps"],
         env=env,
@@ -250,6 +261,7 @@ def main(config):
     env = PPOEnvWrapper(env)
     agent = get_alg(env, config, device)
     agent.load(model_path)
+    agent.set_random_seed(0)
     env.set_agent(agent)
 
     evaluate(
@@ -272,9 +284,15 @@ if __name__ == "__main__":
     args.add_argument("--env_name", type=str, default="fico")
     args.add_argument("--algorithm", type=str, default="ppo")
     args.add_argument("--mu_type", type=str, default="accuracy")
+    args.add_argument("--beta_1", type=float, default=1.0)
+    args.add_argument("--beta_2", type=float, default=1.0)
     args = args.parse_args()
 
-    train_timesteps = 500_000
+    alg_params = {
+        "beta_1": args.beta_1,
+        "beta_2": args.beta_2,
+    }
+    train_timesteps = 5_000
     config = {
         "exp_name": args.algorithm,
         "env_name": args.env_name,
@@ -282,6 +300,6 @@ if __name__ == "__main__":
         "train_timesteps": train_timesteps,
         "mu_type": args.mu_type,
         "omega": 0.05,
-        "algorithm_params": ALG_PARAMS[args.algorithm],
+        "algorithm_params": alg_params,
     }
     main(config)
