@@ -23,13 +23,10 @@ class ResamplingEnv(gym.Env):
         n_features: int = 10,
         utility_method: str = "accuracy",
         delta_method: str = "full",
-        bound_type: str = "chi_divergence",
-        use_max_delta: bool = False,
         seed = None,
     ):
         assert utility_method in ["accuracy", "qualification", "tpr"]
         assert delta_method in ["full", "imputation", "accepted"]
-        assert bound_type in ["chi_divergence", "renyi_divergence"]
         self.n_groups = n_groups
         self.cost = cost
         self.n_applicants = n_applicants
@@ -37,7 +34,6 @@ class ResamplingEnv(gym.Env):
         self.utility_method = utility_method
         self.delta_method = delta_method
         self.action_space = spaces.Discrete(2)
-        self.bound_type = bound_type
 
         resource_space = spaces.Box(
             low=0.0,
@@ -76,6 +72,7 @@ class ResamplingEnv(gym.Env):
         self.init_data["group"] = self.init_data["group"].astype(np.int32)
         self.data = deepcopy(self.init_data)
         self.pool_accepted = [[] for _ in range(self.n_groups)]
+        self.pool_rejected = [[] for _ in range(self.n_groups)]
         self.timestep = 0
 
         self.get_label_pred = lambda x, g : 0
@@ -87,7 +84,8 @@ class ResamplingEnv(gym.Env):
         self.delta_obs = 0
         self.error_bound = [0, 0]
         self.error_accepted = [0, 0]
-        self.chi_divergence = [0, 0]
+        self.error_rejected = [0, 0]
+        self.divergence = [0, 0]
         self.seed(seed)
         self._load_data()
         self._state_init()
@@ -129,7 +127,7 @@ class ResamplingEnv(gym.Env):
             self.init_data["action"][idx] = action
             self.update_utility(idx, label, pred, action, init=True)
 
-        if self.delta_method == "imputation" and self.bound_type == "chi_divergence":
+        if self.delta_method == "imputation":
             # update accepted pool
             # Calculate "one_minus_pi" of new accepted individuals
             for i in range(self.n_groups):
@@ -147,74 +145,27 @@ class ResamplingEnv(gym.Env):
             # the Chi Squared divergence term
 
             self.error_accepted = np.zeros(self.n_groups)
-            self.chi_divergence = np.zeros(self.n_groups)
+            self.error_rejected = np.zeros(self.n_groups)
+            self.divergence = np.zeros(self.n_groups)
 
             if len(self.pool_accepted[0]) == 0 or len(self.pool_accepted[1]) == 0:
                 return
 
             for i in range(self.n_groups):
-                # Create a large dataset of accepted applicants
+                # Calculate first the error on the rejected population
                 group = np.zeros(
-                    (len(self.pool_accepted[i]), self.n_groups), dtype=np.float32
+                    (len(self.pool_rejected[i]), self.n_groups), dtype=np.float32
                 )
                 group[:, i] = 1
                 features = np.array(
-                    [applicant["features"] for applicant in self.pool_accepted[i]]
+                    [applicant["features"] for applicant in self.pool_rejected[i]]
                 )
-
-                # Calculate the error of the updated classifier on the accepted population
                 labels = np.array(
-                    [applicant["label"] for applicant in self.pool_accepted[i]]
+                    [applicant["label"] for applicant in self.pool_rejected[i]]
                 )
                 preds = self.get_pred_batch(features, group)
-                self.error_accepted[i] = (preds - labels).mean()
+                self.error_rejected[i] = np.mean(preds - labels)
 
-                # Calculate the chi_divergence
-                one_minus_pi = 1 - self.get_action_prob_batch(features, group)
-                one_minus_pi_hist = np.array(
-                    [applicant["one_minus_pi"] for applicant in self.pool_accepted[i]]
-                )
-                one_minus_pi_hist *= one_minus_pi
-
-                # Save new one_minus_pi_hist
-                for j in range(len(self.pool_accepted[i])):
-                    self.pool_accepted[i][j]["one_minus_pi"] = one_minus_pi_hist[j]
-
-                one_minus_pi_hist = 1 - one_minus_pi_hist
-                q = one_minus_pi_hist.mean()
-                r = one_minus_pi.mean()
-
-                w = (q / r) * (one_minus_pi / one_minus_pi_hist)
-
-                self.chi_divergence[i] = np.mean((w - 1) ** 2)
-
-            self.error_bound = self.error_accepted + self.chi_divergence
-
-
-        if self.delta_method == "imputation" and self.bound_type == "renyi_divergence":
-            # update accepted pool
-            # Calculate "one_minus_pi" of new accepted individuals
-            for i in range(self.n_groups):
-                group = np.zeros(self.n_groups)
-                group[i] = 1
-                for j in range(len(self.pool_accepted[i])):
-                    if self.pool_accepted[i][j]["one_minus_pi"] is None:
-                        features = self.pool_accepted[i][j]["features"]
-                        prob_list = self.get_action_prob_list(features, group)
-                        self.pool_accepted[i][j]["one_minus_pi"] = np.prod(
-                            [1 - x for x in prob_list]
-                        )
-
-            # Here I need to calculate the error_bound, that is the error of the predictor plus
-            # the Chi Squared divergence term
-
-            self.error_accepted = np.zeros(self.n_groups)
-            self.chi_divergence = np.zeros(self.n_groups)
-
-            if len(self.pool_accepted[0]) == 0 or len(self.pool_accepted[1]) == 0:
-                return
-
-            for i in range(self.n_groups):
                 # Create a large dataset of accepted applicants
                 group = np.zeros(
                     (len(self.pool_accepted[i]), self.n_groups), dtype=np.float32
@@ -243,7 +194,7 @@ class ResamplingEnv(gym.Env):
 
                 weights = (one_minus_pi / one_minus_pi_hist)
 
-                print(f"Weights stats: {weights.mean():.2f} , {weights.max():.2f}")
+                #print(f"Weights stats: {weights.mean():.2f} , {weights.max():.2f}")
                 
                 preds = self.get_pred_batch(features, group)
                 self.error_accepted[i] = (weights * (preds - labels)).mean()
@@ -258,10 +209,10 @@ class ResamplingEnv(gym.Env):
                 C *= np.power(renyi_div, 3/8)
                 C *= 2**(5/4)
 
-                print(f"Renyi div: {renyi_div:.2f}, C: {C:.4f}")
-                self.chi_divergence[i] = C
+                #print(f"Renyi div: {renyi_div:.2f}, C: {C:.4f}")
+                self.divergence[i] = C
 
-            self.error_bound = self.error_accepted + self.chi_divergence
+            self.error_bound = self.error_accepted + self.divergence
 
 
     def compute_disparity(self):
@@ -337,9 +288,10 @@ class ResamplingEnv(gym.Env):
                 out=np.zeros_like(accept_sum),
             )
 
+            imputation = self.data["action"] * self.data["label"] + (1 - self.data["action"]) * self.data["pred"]
             pred_sum = np.array(
                 [
-                    np.sum(self.data["pred"][self.data["group"] == i])
+                    np.sum(imputation[self.data["group"] == i])
                     for i in range(self.n_groups)
                 ]
             )
@@ -357,7 +309,15 @@ class ResamplingEnv(gym.Env):
             else:
                 delta_pred = self.error_bound * (1 - accept_rate) / pred_rate
 
+            #self.delta_pred = max(delta_pred[1], delta_pred[0]) 
             self.delta_pred = abs(delta_pred[1] - delta_pred[0])
+
+            delta_pred_real = np.zeros(self.n_groups)
+            if self.utility_method in ["qualification", "accuracy"]:
+                delta_pred_real = (self.error_rejected) * (1 - accept_rate)
+            else:
+                delta_pred_real = (self.error_rejected) * (1 - accept_rate) / pred_rate
+            self.delta_pred_real = abs(delta_pred_real[1] - delta_pred_real[0])
 
     def _get_observable_state(self):
         group = np.zeros(self.n_groups, dtype = np.float32)
@@ -381,6 +341,14 @@ class ResamplingEnv(gym.Env):
 
         if action == 1 and len(self.pool_accepted[group]) < 50_000:
             self.pool_accepted[group].append(
+                {
+                    "features": features,
+                    "label": label,
+                    "one_minus_pi": None,
+                }
+            )
+        elif action == 0 and len(self.pool_rejected[group]) < 50_000:
+            self.pool_rejected[group].append(
                 {
                     "features": features,
                     "label": label,

@@ -80,6 +80,7 @@ class SELLF(OnPolicyAlgorithm):
         self.clip_range = clip_range
         self.normalize_advantage = normalize_advantage
         self.target_kl = target_kl
+        self.first_iter = True
         self.predictor_steps = 300
 
         self._setup_model()
@@ -142,6 +143,10 @@ class SELLF(OnPolicyAlgorithm):
         continue_training = True
 
         self.train_predictor()
+        if self.first_iter == True:
+            self.first_iter = False
+            # only train the predictor
+            return
 
         # train for n_epochs epochs
         for epoch in range(self.n_epochs):
@@ -331,7 +336,16 @@ class SELLF(OnPolicyAlgorithm):
         self.logger.record("train/error_bound_g0", error_bound[0])
         self.logger.record("train/error_bound_g1", error_bound[1])
         
-        chi_divergence = self.env.get_attr("chi_divergence")[0]
-        self.logger.record("train/divergence_g0", chi_divergence[0])
-        self.logger.record("train/divergence_g1", chi_divergence[1])
+        error_rejected = self.env.get_attr("error_rejected")[0]
+        self.logger.record("train/error_rejected_g0", error_rejected[0])
+        self.logger.record("train/error_rejected_g1", error_rejected[1])
+
+        divergence = self.env.get_attr("divergence")[0]
+        self.logger.record("train/divergence_g0", divergence[0])
+        self.logger.record("train/divergence_g1", divergence[1])
+
+        delta_pred_real = self.env.get_attr("delta_pred_real")[0]
+        self.logger.record("train/delta_pred_real", delta_pred_real)
+        
+        
 

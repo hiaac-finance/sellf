@@ -196,10 +196,6 @@ def main(config):
     eval_dir = f"{exp_dir}/eval"
     config["use_predictor"] = config["algorithm"].find("sellf") != -1
     env = get_env(config["env_name"], config["mu_type"], config["algorithm"])
-    if "renyi" in config["algorithm"]:
-        env.bound_type = "renyi_divergence"
-    if config["algorithm"] == "sellf_renyi_v2":
-        env.use_max_delta = True
 
     # set seeds
     random.seed(0)
