@@ -91,15 +91,15 @@ class OnPolicyAlgorithm:
         rollout_buffer: RolloutBuffer,
         n_rollout_steps: int,
     ) -> None:
-        if self._last_obs is None:
-            self._last_obs = env.reset()
-            self._last_episode_starts = np.ones((env.num_envs,), dtype=bool)
-
         # Switch to eval mode (this affects batch norm / dropout)
         self.policy.eval()
 
         # first, predict for everyone in the pool
         env.env_method("update_models")
+
+        if self._last_obs is None:
+            self._last_obs = env.reset()
+            self._last_episode_starts = np.ones((env.num_envs,), dtype=bool)
 
         n_steps = 0
         rollout_buffer.reset()

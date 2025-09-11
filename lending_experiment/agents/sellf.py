@@ -80,8 +80,7 @@ class SELLF(OnPolicyAlgorithm):
         self.clip_range = clip_range
         self.normalize_advantage = normalize_advantage
         self.target_kl = target_kl
-        self.first_iter = True
-        self.predictor_steps = 300
+        self.predictor_steps = 10
 
         self._setup_model()
 
@@ -128,7 +127,6 @@ class SELLF(OnPolicyAlgorithm):
         mean_loss = np.mean(losses_hist)
         self.logger.record("train/pred_loss", mean_loss)
 
-        self.predictor_steps = 5
 
     def train(self) -> None:
         """

@@ -83,6 +83,7 @@ class ResamplingEnv(gym.Env):
         self.get_action_prob_list = lambda x, g: 0
         self.get_action_prob_batch = lambda x, g: 0
         self.get_pred_batch = lambda x, g: 0
+        self.delta = 0
         self.delta_obs = 0
         self.error_bound = [0, 0]
         self.error_accepted = [0, 0]
@@ -269,7 +270,6 @@ class ResamplingEnv(gym.Env):
                     for i in range(self.n_groups)
                 ]
             )
-            print(self.utility_sum_obs, self.group_counts_obs)
             self.utility_values_obs = np.true_divide(
                 self.utility_sum_obs,
                 self.group_counts_obs,
