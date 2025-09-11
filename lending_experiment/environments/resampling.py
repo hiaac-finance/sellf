@@ -23,7 +23,7 @@ class ResamplingEnv(gym.Env):
         n_features: int = 10,
         utility_method: str = "accuracy",
         delta_method: str = "full",
-        seed = None,
+        seed=None,
     ):
         assert utility_method in ["accuracy", "qualification", "tpr"]
         assert delta_method in ["full", "imputation", "imputation_hard", "accepted"]
@@ -68,19 +68,21 @@ class ResamplingEnv(gym.Env):
                 ]
             ]
         )
-        self.init_data["features"] = np.zeros((self.n_applicants, self.n_features), dtype=np.float32)
+        self.init_data["features"] = np.zeros(
+            (self.n_applicants, self.n_features), dtype=np.float32
+        )
         self.init_data["group"] = self.init_data["group"].astype(np.int32)
         self.data = deepcopy(self.init_data)
         self.pool_accepted = [[] for _ in range(self.n_groups)]
         self.pool_rejected = [[] for _ in range(self.n_groups)]
         self.timestep = 0
 
-        self.get_label_pred = lambda x, g : 0
-        self.get_action = lambda x, g : 0
-        self.get_action_prob = lambda x, g : 0
-        self.get_action_prob_list = lambda x, g : 0
-        self.get_action_prob_batch = lambda x, g : 0
-        self.get_pred_batch = lambda x, g : 0
+        self.get_label_pred = lambda x, g: 0
+        self.get_action = lambda x, g: 0
+        self.get_action_prob = lambda x, g: 0
+        self.get_action_prob_list = lambda x, g: 0
+        self.get_action_prob_batch = lambda x, g: 0
+        self.get_pred_batch = lambda x, g: 0
         self.delta_obs = 0
         self.error_bound = [0, 0]
         self.error_accepted = [0, 0]
@@ -89,7 +91,6 @@ class ResamplingEnv(gym.Env):
         self.seed(seed)
         self._load_data()
         self._state_init()
-        
 
     def seed(self, seed=None):
         np.random.seed(seed)
@@ -135,7 +136,6 @@ class ResamplingEnv(gym.Env):
                     }
                 )
             self.update_utility(idx, label, pred, action, init=True)
-            
 
         if "imputation" in self.delta_method:
             # update accepted pool
@@ -202,29 +202,28 @@ class ResamplingEnv(gym.Env):
 
                 one_minus_pi_hist = 1 - one_minus_pi_hist
 
-                weights = (one_minus_pi / one_minus_pi_hist)
+                weights = one_minus_pi / one_minus_pi_hist
 
-                #print(f"Weights stats: {weights.mean():.2f} , {weights.max():.2f}")
-                
+                # print(f"Weights stats: {weights.mean():.2f} , {weights.max():.2f}")
+
                 preds = self.get_pred_batch(features, group)
                 self.error_accepted[i] = (weights * (preds - labels)).mean()
 
-                renyi_div = np.mean((one_minus_pi / one_minus_pi_hist)**2)
+                renyi_div = np.mean((one_minus_pi / one_minus_pi_hist) ** 2)
 
                 # calculate complexity term
                 delta = 0.95
                 m = len(one_minus_pi)
                 p = self.n_features
-                C = np.sqrt((p * np.log(2 * m * np.e / p) + np.log(4/ delta)) / m)
-                C *= np.power(renyi_div, 3/8)
-                C *= 2**(5/4)
+                C = np.sqrt((p * np.log(2 * m * np.e / p) + np.log(4 / delta)) / m)
+                C *= np.power(renyi_div, 3 / 8)
+                C *= 2 ** (5 / 4)
 
-                #print(f"Renyi div: {renyi_div:.2f}, C: {C:.4f}")
+                # print(f"Renyi div: {renyi_div:.2f}, C: {C:.4f}")
                 self.divergence[i] = C
 
             self.error_bound = self.error_accepted + self.divergence
             self.error_bound = np.clip(self.error_bound, 0, 1)
-
 
     def compute_disparity(self):
         # calculate disparity using self.data
@@ -299,7 +298,10 @@ class ResamplingEnv(gym.Env):
                 out=np.zeros_like(accept_sum),
             )
 
-            imputation = self.data["action"] * self.data["label"] + (1 - self.data["action"]) * self.data["pred"]
+            imputation = (
+                self.data["action"] * self.data["label"]
+                + (1 - self.data["action"]) * self.data["pred"]
+            )
             pred_sum = np.array(
                 [
                     np.sum(imputation[self.data["group"] == i])
@@ -321,7 +323,7 @@ class ResamplingEnv(gym.Env):
                 delta_pred = self.error_bound * (1 - accept_rate) / pred_rate
 
             if self.delta_method == "imputation_hard":
-                self.delta_pred = max(delta_pred[1], delta_pred[0]) 
+                self.delta_pred = max(delta_pred[1], delta_pred[0])
             else:
                 self.delta_pred = abs(delta_pred[1] - delta_pred[0])
 
@@ -335,7 +337,7 @@ class ResamplingEnv(gym.Env):
         self.delta_delta = self.delta_obs - old_delta
 
     def _get_observable_state(self):
-        group = np.zeros(self.n_groups, dtype = np.float32)
+        group = np.zeros(self.n_groups, dtype=np.float32)
         group[int(self.data["group"][self.idx])] = 1
         return {
             "resource": np.array(self.resource),
@@ -362,7 +364,7 @@ class ResamplingEnv(gym.Env):
                     "one_minus_pi": None,
                 }
             )
-        
+
         self.update_resource(action, label)
         # Update utility based on this action for this applicant
         self.update_utility(self.idx, label, pred, action)
@@ -439,7 +441,6 @@ class ResamplingEnv(gym.Env):
         self.data["pred"][idx] = pred
         self.data["action"][idx] = action
 
-
     def update_features(self, features, action, label):
         return features
 
@@ -456,7 +457,7 @@ class LendingEnv(ResamplingEnv):
         utility_method: str = "accuracy",
         delta_method: str = "full",
         group_ratios: str = "data",
-        seed = None,
+        seed=None,
     ):
         assert group_ratios in ["data", "equal"]
         self.n_groups = 2
@@ -473,7 +474,7 @@ class LendingEnv(ResamplingEnv):
             n_features=self.n_features,
             utility_method=self.utility_method,
             delta_method=self.delta_method,
-            seed = seed,
+            seed=seed,
         )
 
     def _load_data(self):
@@ -513,7 +514,6 @@ class LendingEnv(ResamplingEnv):
             self.init_data["label"][i] = label
             self.init_data["pred"][i] = pred
             self.init_data["action"][i] = action
-    
 
     def update_features(self, features, action, label):
         if action == 0:
@@ -529,17 +529,19 @@ class LendingEnv(ResamplingEnv):
         features[new_score] = 1
         return features
 
+
 class EnemEnv(ResamplingEnv):
     """
     Environment for school admission experiments.
     """
+
     def __init__(
         self,
         cost: float = 0.5,
         n_applicants: int = 10000,
         utility_method: str = "accuracy",
         delta_method: str = "full",
-        seed = None,
+        seed=None,
     ):
         super().__init__(
             n_groups=2,
@@ -548,7 +550,7 @@ class EnemEnv(ResamplingEnv):
             n_applicants=n_applicants,
             utility_method=utility_method,
             delta_method=delta_method,
-            seed = seed,
+            seed=seed,
         )
 
     def _load_data(self):
@@ -588,7 +590,9 @@ class EnemEnv(ResamplingEnv):
 
         group = np.argmax(features[1:3])
         age_groups = 6
-        age = np.argmax(features[(age_groups * group + 3) : (age_groups * (group + 1) + 3)])
+        age = np.argmax(
+            features[(age_groups * group + 3) : (age_groups * (group + 1) + 3)]
+        )
         new_age = min(age + 1, age_groups - 1)
 
         new_features = features.copy()
