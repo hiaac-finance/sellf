@@ -26,7 +26,7 @@ class ResamplingEnv(gym.Env):
         seed = None,
     ):
         assert utility_method in ["accuracy", "qualification", "tpr"]
-        assert delta_method in ["full", "imputation", "accepted"]
+        assert delta_method in ["full", "imputation", "imputation_hard", "accepted"]
         self.n_groups = n_groups
         self.cost = cost
         self.n_applicants = n_applicants
@@ -117,6 +117,7 @@ class ResamplingEnv(gym.Env):
         return self._get_observable_state()
 
     def update_models(self):
+        self.pool_rejected = [[] for _ in range(self.n_groups)]
         for idx in range(self.n_applicants):
             group = self.init_data["group"][idx]
             features = self.init_data["features"][idx]
@@ -125,9 +126,18 @@ class ResamplingEnv(gym.Env):
             action = self.get_action(features, group)
             self.init_data["pred"][idx] = pred
             self.init_data["action"][idx] = action
+            if action == 0:
+                self.pool_rejected[group].append(
+                    {
+                        "features": features,
+                        "label": label,
+                        "one_minus_pi": None,
+                    }
+                )
             self.update_utility(idx, label, pred, action, init=True)
+            
 
-        if self.delta_method == "imputation":
+        if "imputation" in self.delta_method:
             # update accepted pool
             # Calculate "one_minus_pi" of new accepted individuals
             for i in range(self.n_groups):
@@ -213,6 +223,7 @@ class ResamplingEnv(gym.Env):
                 self.divergence[i] = C
 
             self.error_bound = self.error_accepted + self.divergence
+            self.error_bound = np.clip(self.error_bound, 0, 1)
 
 
     def compute_disparity(self):
@@ -243,10 +254,9 @@ class ResamplingEnv(gym.Env):
         old_delta = self.delta_obs
         self.delta = abs(self.utility_values[1] - self.utility_values[0])
         self.delta_obs = self.delta
-        self.delta_delta = self.delta_obs - old_delta
         self.delta_pred = 0
 
-        if self.delta_method == "accepted" or self.delta_method == "imputation":
+        if "accepted" in self.delta_method or "imputation" in self.delta_method:
             self.data["utility_obs"] *= self.data["active_obs"]
             self.group_counts_obs = np.array(
                 [
@@ -260,6 +270,7 @@ class ResamplingEnv(gym.Env):
                     for i in range(self.n_groups)
                 ]
             )
+            print(self.utility_sum_obs, self.group_counts_obs)
             self.utility_values_obs = np.true_divide(
                 self.utility_sum_obs,
                 self.group_counts_obs,
@@ -270,7 +281,7 @@ class ResamplingEnv(gym.Env):
                 self.utility_values_obs[1] - self.utility_values_obs[0]
             )
 
-        if self.delta_method == "imputation":
+        if "imputation" in self.delta_method:
             # calculate other necessary delta values
             group_counts = np.array(
                 [np.sum(self.data["group"] == i) for i in range(self.n_groups)]
@@ -309,8 +320,10 @@ class ResamplingEnv(gym.Env):
             else:
                 delta_pred = self.error_bound * (1 - accept_rate) / pred_rate
 
-            #self.delta_pred = max(delta_pred[1], delta_pred[0]) 
-            self.delta_pred = abs(delta_pred[1] - delta_pred[0])
+            if self.delta_method == "imputation_hard":
+                self.delta_pred = max(delta_pred[1], delta_pred[0]) 
+            else:
+                self.delta_pred = abs(delta_pred[1] - delta_pred[0])
 
             delta_pred_real = np.zeros(self.n_groups)
             if self.utility_method in ["qualification", "accuracy"]:
@@ -318,6 +331,8 @@ class ResamplingEnv(gym.Env):
             else:
                 delta_pred_real = (self.error_rejected) * (1 - accept_rate) / pred_rate
             self.delta_pred_real = abs(delta_pred_real[1] - delta_pred_real[0])
+
+        self.delta_delta = self.delta_obs - old_delta
 
     def _get_observable_state(self):
         group = np.zeros(self.n_groups, dtype = np.float32)
@@ -347,14 +362,7 @@ class ResamplingEnv(gym.Env):
                     "one_minus_pi": None,
                 }
             )
-        elif action == 0 and len(self.pool_rejected[group]) < 50_000:
-            self.pool_rejected[group].append(
-                {
-                    "features": features,
-                    "label": label,
-                    "one_minus_pi": None,
-                }
-            )
+        
         self.update_resource(action, label)
         # Update utility based on this action for this applicant
         self.update_utility(self.idx, label, pred, action)
@@ -391,7 +399,7 @@ class ResamplingEnv(gym.Env):
             utility_obs = utility_value
             active_obs = active if action == 1 else 0
 
-        if self.delta_method == "imputation":
+        if "imputation" in self.delta_method:
             active_obs = 1
             label_obs = label if action == 1 else pred
             if self.utility_method == "accuracy":
@@ -419,6 +427,14 @@ class ResamplingEnv(gym.Env):
         label = self.get_label(features, group)
         pred = self.get_label_pred(features, group)
         action = self.get_action(features, group)
+        if action == 0:
+            self.pool_rejected[group].append(
+                {
+                    "features": features,
+                    "label": label,
+                    "one_minus_pi": None,
+                }
+            )
         self.data["label"][idx] = label
         self.data["pred"][idx] = pred
         self.data["action"][idx] = action

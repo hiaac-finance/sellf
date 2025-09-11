@@ -47,8 +47,10 @@ EXP_DIR = "./experiments"
 def get_env(env_name: str, utility_method: str, algorithm: str) -> ResamplingEnv:
     if algorithm in ["pocar_full", "ppo", "rrm"]:
         delta_method = "full"
-    elif algorithm.find("sellf") != -1:
+    elif algorithm == "sellf":
         delta_method = "imputation"
+    elif algorithm == "sellf_hard":
+        delta_method = "imputation_hard"
     else:
         delta_method = "accepted"
     if env_name == "fico":
@@ -185,9 +187,7 @@ def main(config):
     with open("log.txt", "a") as f:
         f.write("\n-------------------------------------------------------------\n")
         f.write(f"Start time: {time.strftime('%H:%M:%S', time.localtime(start))}\n")
-        f.write(f"Environment: {config['env_name']}\n")
-        f.write(f"Algorithm: {config['algorithm']}\n")
-        f.write(f"Train Timesteps: {config['train_timesteps']}\n")
+        f.write(f"Config: {config}\n")
 
     exp_dir = (
         f"./experiments/{config['env_name']}/{config['mu_type']}/{config['exp_name']}"
@@ -239,8 +239,7 @@ def main(config):
     with open("log.txt", "a") as f:
         f.write(f"End time: {time.strftime('%H:%M:%S', time.localtime(end))}\n")
         f.write(f"Took: {(end - start) / 60} minutes\n")
-        f.write("\n")
-
+        f.write(f"Config: {config}\n\n")
 
 if __name__ == "__main__":
     args = argparse.ArgumentParser()
