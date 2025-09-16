@@ -456,17 +456,19 @@ class LendingEnv(ResamplingEnv):
         n_applicants: int = 10000,
         utility_method: str = "accuracy",
         delta_method: str = "full",
-        group_ratios: str = "data",
+        distributions: str = "fico",
         seed=None,
     ):
-        assert group_ratios in ["data", "equal"]
+        assert distributions in ["fico", "fico_equal", "fico_hard", "setting1", "setting2"]
         self.n_groups = 2
         self.cost = cost
         self.n_applicants = n_applicants
         self.n_features = 10
+        if "setting" in distributions:
+            self.n_features = 14
         self.utility_method = utility_method
         self.delta_method = delta_method
-        self.group_ratios = group_ratios
+        self.distributions = distributions
         super().__init__(
             n_groups=self.n_groups,
             cost=self.cost,
@@ -477,21 +479,154 @@ class LendingEnv(ResamplingEnv):
             seed=seed,
         )
 
+    def _load_probs(self):
+        shift_probs = [
+            [0, 1, 0],
+            [0, 1, 0],
+        ]
+        if self.distributions == "fico":
+            with open("data/fico.pkl", "rb") as f:
+                data = pkl.load(f)
+            group_probs = data["group_likelihoods"]
+            cluster_probs = data["cluster_probabilities"]
+            success_probs = data["success_probabilities"]
+        elif self.distributions == "fico_equal":
+            group_probs = [0.5, 0.5]
+            with open("data/fico.pkl", "rb") as f:
+                data = pkl.load(f)
+            cluster_probs = data["cluster_probabilities"]
+            success_probs = data["success_probabilities"]
+        elif self.distributions == "fico_hard":
+            group_probs = [0.5, 0.5]
+            with open("data/fico.pkl", "rb") as f:
+                data = pkl.load(f)
+            cluster_probs = data["cluster_probabilities"]
+            success_probs = data["success_probabilities"]
+            shift_probs = [
+                [0.25, 0.7, 0.05],
+                [0.05, 0.85, 0.1],
+            ]
+        elif self.distributions == "setting1":
+            group_probs = [0.5, 0.5]
+            cluster_probs = [
+                [
+                    0.0,
+                    0.0,
+                    0.05,
+                    0.05,
+                    0.05,
+                    0.05,
+                    0.1,
+                    0.1,
+                    0.15,
+                    0.15,
+                    0.15,
+                    0.15,
+                    0.0,
+                    0.0,
+                ],
+                [
+                    0.05,
+                    0.05,
+                    0.05,
+                    0.05,
+                    0.1,
+                    0.1,
+                    0.15,
+                    0.15,
+                    0.15,
+                    0.15,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                ],
+            ]
+            success_probs = [
+                0.773,
+                0.804,
+                0.833,
+                0.857,
+                0.879,
+                0.898,
+                0.914,
+                0.928,
+                0.939,
+                0.949,
+                0.958,
+                0.965,
+                0.970,
+                0.975,
+            ]
+            success_probs = [success_probs, success_probs]
+        elif self.distributions == "setting2":
+            group_probs = [0.5, 0.5]
+            cluster_probs = [
+                [
+                    0.0,
+                    0.0,
+                    0.05,
+                    0.05,
+                    0.05,
+                    0.05,
+                    0.1,
+                    0.1,
+                    0.15,
+                    0.15,
+                    0.15,
+                    0.15,
+                    0.0,
+                    0.0,
+                ],
+                [
+                    0.05,
+                    0.05,
+                    0.05,
+                    0.05,
+                    0.1,
+                    0.1,
+                    0.15,
+                    0.15,
+                    0.15,
+                    0.15,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                ],
+            ]
+            success_probs = [
+                0.506,
+                0.594,
+                0.677,
+                0.750,
+                0.812,
+                0.861,
+                0.898,
+                0.927,
+                0.948,
+                0.963,
+                0.974,
+                0.982,
+                0.987,
+                0.991,
+            ]
+            success_probs = [success_probs, success_probs]
+
+        return group_probs, cluster_probs, success_probs, shift_probs
+
     def _load_data(self):
-        with open("data/fico.pkl", "rb") as f:
-            data = pkl.load(f)
-        if self.group_ratios == "data":
-            groups_probs = data["group_likelihoods"]
-        else:
-            groups_probs = [0.5, 0.5]
-        cluster_probs = data["cluster_probabilities"]
-        success_probs = data["success_probabilities"]
+        groups_probs, cluster_probs, success_probs, shift_probs = self._load_probs()
 
         def sample_label(x, g):
             # if x is not an scalar, get the argmax
             if not np.isscalar(x):
                 x = np.argmax(x)
-            return np.random.binomial(n=1, p=success_probs[g][x])
+            y = np.random.binomial(n=1, p=success_probs[g][x])
+            shift_prob = shift_probs[g]
+            options = [0, y, 1]
+            y = np.random.choice(options, p=shift_prob)
+            return y
 
         self.get_label = sample_label
 
