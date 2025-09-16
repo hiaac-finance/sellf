@@ -37,11 +37,30 @@ from lending_experiment.environments.resampling import (
 import argparse
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cpu")
 print("Using device: ", device)
 torch.cuda.empty_cache()
 
-EXP_DIR = "./experiments"
+import torch.multiprocessing as mp
 
+EXP_DIR = "./experiments"
+PARAMS_ALGO = {}
+PARAMS_ALGO["ppo"] = [{}]
+PARAMS_ALGO["rrm"] = [
+    {"beta_1": 0.0},
+    {"beta_1": 0.25},
+    {"beta_1": 0.5},
+    {"beta_1": 1},
+    {"beta_1": 2},
+    {"beta_1": 5},
+]
+PARAMS_ALGO["pocar"] = []
+for beta_1 in [0.5, 1, 5]:
+    for beta_2 in [0.0, 0.5, 1.0]:
+        PARAMS_ALGO["pocar"].append({"beta_1": beta_1, "beta_2": beta_2})
+PARAMS_ALGO["pocar_full"] = PARAMS_ALGO["pocar"]
+PARAMS_ALGO["sellf"] = PARAMS_ALGO["pocar"]
+PARAMS_ALGO["sellf_hard"] = PARAMS_ALGO["pocar"]
 
 
 def get_env(env_name: str, utility_method: str, algorithm: str) -> ResamplingEnv:
@@ -53,15 +72,11 @@ def get_env(env_name: str, utility_method: str, algorithm: str) -> ResamplingEnv
         delta_method = "imputation_hard"
     else:
         delta_method = "accepted"
-    if env_name == "fico":
-        env = LendingEnv(
-            utility_method=utility_method, delta_method=delta_method, seed=0
-        )
-    elif env_name == "fico_equal":
+    if env_name in ["fico", "fico_equal", "fico_hard", "setting1", "setting2"]:
         env = LendingEnv(
             utility_method=utility_method,
             delta_method=delta_method,
-            group_ratios="equal",
+            distributions=env_name,
             n_applicants=4_000,
             seed=0,
         )
@@ -127,7 +142,7 @@ def train(train_timesteps, env, save_dir, config):
     shutil.rmtree(save_dir, ignore_errors=True)
     Path(save_dir).mkdir(parents=True, exist_ok=True)
 
-    model.set_logger(configure(folder=save_dir))
+    model.set_logger(configure(folder=save_dir, format_strings=["csv"]))
     model.learn(total_timesteps=train_timesteps)
     model.save(save_dir + "/final_model")
 
@@ -188,6 +203,7 @@ def main(config):
         f.write("\n-------------------------------------------------------------\n")
         f.write(f"Start time: {time.strftime('%H:%M:%S', time.localtime(start))}\n")
         f.write(f"Config: {config}\n")
+        f.write("\n-------------------------------------------------------------\n")
 
     exp_dir = (
         f"./experiments/{config['env_name']}/{config['mu_type']}/{config['exp_name']}"
@@ -237,9 +253,12 @@ def main(config):
 
     end = time.time()
     with open("log.txt", "a") as f:
+        f.write("\n-------------------------------------------------------------\n")
         f.write(f"End time: {time.strftime('%H:%M:%S', time.localtime(end))}\n")
         f.write(f"Took: {(end - start) / 60} minutes\n")
         f.write(f"Config: {config}\n\n")
+        f.write("\n-------------------------------------------------------------\n")
+
 
 if __name__ == "__main__":
     args = argparse.ArgumentParser()
@@ -247,23 +266,38 @@ if __name__ == "__main__":
     args.add_argument("--env_name", type=str, default="fico")
     args.add_argument("--algorithm", type=str, default="ppo")
     args.add_argument("--mu_type", type=str, default="accuracy")
-    args.add_argument("--beta_1", type=float, default=1.0)
-    args.add_argument("--beta_2", type=float, default=1.0)
+    args.add_argument("--train_timesteps", type=int, default=500_000)
     args = args.parse_args()
 
-    alg_params = {
-        "beta_1": args.beta_1,
-        "beta_2": args.beta_2,
-    }
-    train_timesteps = 500_000
-    exp_name = args.algorithm + f"_b1_{args.beta_1}_b2_{args.beta_2}"
-    config = {
-        "exp_name": exp_name,
-        "env_name": args.env_name,
-        "algorithm": args.algorithm,
-        "train_timesteps": train_timesteps,
-        "mu_type": args.mu_type,
-        "omega": 0.05,
-        "algorithm_params": alg_params,
-    }
-    main(config)
+    params_list = PARAMS_ALGO[args.algorithm]
+
+    n_jobs = 8
+    # run experiment for each algorithm in separated proccess
+    config_list = []
+    for params in params_list:
+        params_str = " ".join([f"{k}={v}" for k, v in params.items()])
+        exp_name = args.algorithm + f"_{params_str}"
+        config = {
+            "exp_name": exp_name,
+            "env_name": args.env_name,
+            "algorithm": args.algorithm,
+            "train_timesteps": args.train_timesteps,
+            "mu_type": args.mu_type,
+            "omega": 0.05,
+            "algorithm_params": params,
+        }
+        config_list.append(config)
+
+    mp.set_start_method("spawn")
+    processes = []
+    for config in config_list:
+        p = mp.Process(target=main, args=(config,))
+        p.start()
+        processes.append(p)
+        if len(processes) >= n_jobs:
+            for p in processes:
+                p.join()
+            processes = []
+
+    for p in processes:
+        p.join()
