@@ -50,6 +50,7 @@ class RolloutBufferSamples(NamedTuple):
 class ReplayMemorySamples(NamedTuple):
     observations: th.Tensor
     labels: th.Tensor
+    groups: th.Tensor
 
 
 class BaseBuffer(ABC):
@@ -435,17 +436,21 @@ class ReplayMemory(BaseBuffer):
     def reset(self) -> None:
         self.observations = np.zeros((0,) + self.obs_shape, dtype=np.float32)
         self.labels = np.zeros((0, 1), dtype=np.float32)
+        self.groups = np.zeros((0, 2), dtype=np.float32)
         self.pos = 0
 
-    def add(self, obs: np.ndarray, label: np.ndarray) -> None:
+    def add(self, obs: np.ndarray, label: np.ndarray, group : np.ndarray) -> None:
         # this function should concatenate the old and the new data, and
         # sample the new data to the original size
 
         if obs.shape[1] == 1:
             obs = obs.squeeze(axis=1)
+        if group.shape[1] == 1:
+            group = group.squeeze(axis=1)
 
         self.observations = np.concatenate((self.observations, obs), axis=0)
         self.labels = np.concatenate((self.labels, label), axis=0)
+        self.groups = np.concatenate((self.groups, group), axis=0)
 
         if self.observations.shape[0] > self.buffer_size:
             indices = np.random.choice(
@@ -455,6 +460,7 @@ class ReplayMemory(BaseBuffer):
             )
             self.observations = self.observations[indices]
             self.labels = self.labels[indices]
+            self.groups = self.groups[indices]
 
     def get(
         self, batch_size: Optional[int] = None
@@ -467,6 +473,7 @@ class ReplayMemory(BaseBuffer):
             _tensor_names = [
                 "observations",
                 "labels",
+                "groups",
             ]
 
             # for tensor in _tensor_names:
@@ -488,5 +495,6 @@ class ReplayMemory(BaseBuffer):
         data = (
             self.observations[batch_inds],
             self.labels[batch_inds],
+            self.groups[batch_inds],
         )
         return ReplayMemorySamples(*tuple(map(self.to_torch, data)))

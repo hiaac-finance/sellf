@@ -271,7 +271,7 @@ if __name__ == "__main__":
 
     params_list = PARAMS_ALGO[args.algorithm]
 
-    n_jobs = 8
+    n_jobs = 9
     # run experiment for each algorithm in separated proccess
     config_list = []
     for params in params_list:
