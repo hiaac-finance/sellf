@@ -220,6 +220,13 @@ class ResamplingEnv(gym.Env):
                 C *= np.power(renyi_div, 3 / 8)
                 C *= 2 ** (5 / 4)
 
+                # M = 2
+                # term1 = p * np.log(2 * m * np.e / p) + np.log(2 / delta)
+                # term1 *= 4 * M / (3 * m)
+                # term2 = 2 * renyi_div * (p * np.log(2 * m * np.e / p) + np.log(2 / delta))
+                # term2 = np.sqrt(term2 / m)
+                # C = term1 + term2
+
                 # print(f"Renyi div: {renyi_div:.2f}, C: {C:.4f}")
                 self.divergence[i] = C
 
@@ -712,7 +719,7 @@ class EnemEnv(ResamplingEnv):
 
         def sample_label(x, g):
             p = self.model.predict_proba(x[:-1].reshape(1, -1))[0, 1]
-            gain = x[-1] * 0.3
+            gain = x[-1] * 1
             p = min(gain + p, 1)
             return 1 if np.random.rand() < p else 0
 
@@ -733,10 +740,10 @@ class EnemEnv(ResamplingEnv):
 
     def update_features(self, features, action, label):
         if action == 1 or label == 1:
-            features[-1] += 1
+            features[-1] = 1
 
         group = features[0]
-        age_groups = 5
+        age_groups = 2
         age = np.argmax(features[1 : 1 + age_groups])
         new_age = min(age + 1, age_groups - 1)
 
@@ -744,3 +751,6 @@ class EnemEnv(ResamplingEnv):
         new_features[1 + age] = 0
         new_features[1 + new_age] = 1
         return new_features
+
+    def _is_done(self):
+        return self.resource <= 0 or self.timestep >= 2048
