@@ -9,7 +9,6 @@ from gym import spaces
 from torch.nn import functional as F
 import time
 
-from stable_baselines3.common.vec_env import VecEnv
 from stable_baselines3.common.utils import explained_variance
 
 
@@ -19,7 +18,7 @@ from lending_experiment.agents.on_policy_algorithm import OnPolicyAlgorithm
 class POCAR(OnPolicyAlgorithm):
     def __init__(
         self,
-        env: Union[gym.Env, VecEnv],
+        env: gym.Env,
         learning_rate: float = 1e-5,
         beta_0: float = 1,
         beta_1: float = 0.5,
@@ -63,12 +62,7 @@ class POCAR(OnPolicyAlgorithm):
                 batch_size > 1
             ), "`batch_size` must be greater than 1. See https://github.com/DLR-RM/stable-baselines3/issues/440"
 
-        if self.env is not None:
-            if hasattr(env, "utility_method"):
-                self.utility_method = env.utility_method
-            else:
-                self.utility_method = env.get_attr("utility_method")[0]
-
+        self.utility_method = env.utility_method
         self.beta_0 = beta_0
         self.beta_1 = beta_1
         self.beta_2 = beta_2

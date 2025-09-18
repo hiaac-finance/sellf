@@ -109,6 +109,8 @@ class Agent(nn.Module):
 
     def get_label(self, x: torch.Tensor) -> torch.Tensor:
         if not self.use_predictor:
+            if x.dim == 1:
+                x = x.unsqueeze(0)
             return torch.zeros(x.size(0), dtype=torch.long, device=x.device)
         log_odds = self.predictor(x)
         probs = torch.sigmoid(log_odds)

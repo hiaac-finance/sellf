@@ -13,7 +13,6 @@ import torch
 from stable_baselines3.common.callbacks import CheckpointCallback
 from stable_baselines3.common.logger import configure
 from stable_baselines3.common.monitor import Monitor
-from stable_baselines3.common.vec_env import DummyVecEnv
 
 import sys
 
@@ -122,11 +121,10 @@ def train(train_timesteps, env, save_dir, config):
 
     env = PPOEnvWrapper(env=env)
     env = Monitor(env)
-    env = DummyVecEnv([lambda: env])
 
     model = get_alg(env, config, device)
     model.set_random_seed(0)
-    env.env_method("set_agent", model)
+    env.set_agent(model)
 
     shutil.rmtree(save_dir, ignore_errors=True)
     Path(save_dir).mkdir(parents=True, exist_ok=True)

@@ -9,7 +9,6 @@ from gym import spaces
 from torch.nn import functional as F
 import time
 
-from stable_baselines3.common.vec_env import VecEnv
 from stable_baselines3.common.utils import explained_variance
 
 
@@ -19,12 +18,12 @@ from lending_experiment.agents.on_policy_algorithm import OnPolicyAlgorithm
 class SELLF(OnPolicyAlgorithm):
     def __init__(
         self,
-        env: Union[gym.Env, VecEnv],
+        env: gym.Env,
         learning_rate: float = 1e-5,
         beta_0: float = 1,
         beta_1: float = 0.5,
         beta_2: float = 0.5,
-        beta_3: float = 0.5,
+        beta_3: float = 0.,
         omega: float = 0.1,
         n_steps: int = 2048,
         batch_size: int = 64,
@@ -64,12 +63,7 @@ class SELLF(OnPolicyAlgorithm):
                 batch_size > 1
             ), "`batch_size` must be greater than 1. See https://github.com/DLR-RM/stable-baselines3/issues/440"
 
-        if self.env is not None:
-            if hasattr(env, "utility_method"):
-                self.utility_method = env.utility_method
-            else:
-                self.utility_method = env.get_attr("utility_method")[0]
-
+        self.utility_method = env.utility_method
         self.beta_0 = beta_0
         self.beta_1 = beta_1
         self.beta_2 = beta_2
@@ -263,10 +257,20 @@ class SELLF(OnPolicyAlgorithm):
 
                 entropy_losses.append(entropy_loss.item())
 
+                # also minimize the Renyi divergence between the current policy and all previous policies
+                if self.beta_3 > 0:
+                    prob_action = self.policy.get_action_prob(rollout_data.observations)
+                    prob_all_action = self.policy.get_action_all_prob(rollout_data.observations)
+                    ratio_all = (1 - prob_action) / (prob_all_action + 1e-8)
+                    renyi_div = th.mean(ratio_all[actions == 1] ** 2) 
+                else:
+                    renyi_div = 0
+
                 loss = (
                     policy_loss
                     + self.ent_coef * entropy_loss
                     + self.vf_coef * value_loss
+                    + self.beta_3 * renyi_div
                 )
 
                 # Calculate approximate form of reverse KL Divergence for early stopping
@@ -347,23 +351,23 @@ class SELLF(OnPolicyAlgorithm):
             self.logger.record("train/std", th.exp(self.policy.log_std).mean().item())
 
         
-        error_rate = self.env.get_attr("error_accepted")[0]
+        error_rate = self.env.error_accepted
         self.logger.record("train/error_g0", error_rate[0])
         self.logger.record("train/error_g1", error_rate[1])
 
-        error_bound = self.env.get_attr("error_bound")[0]
+        error_bound = self.env.error_bound
         self.logger.record("train/error_bound_g0", error_bound[0])
         self.logger.record("train/error_bound_g1", error_bound[1])
         
-        error_rejected = self.env.get_attr("error_rejected")[0]
+        error_rejected = self.env.error_rejected
         self.logger.record("train/error_rejected_g0", error_rejected[0])
         self.logger.record("train/error_rejected_g1", error_rejected[1])
 
-        divergence = self.env.get_attr("divergence")[0]
+        divergence = self.env.divergence
         self.logger.record("train/divergence_g0", divergence[0])
         self.logger.record("train/divergence_g1", divergence[1])
 
-        delta_pred_real = self.env.get_attr("delta_pred_real")[0]
+        delta_pred_real = self.env.delta_pred_real
         self.logger.record("train/delta_pred_real", delta_pred_real)
         
         

@@ -9,7 +9,6 @@ from gym import spaces
 from torch.nn import functional as F
 import time
 
-from stable_baselines3.common.vec_env import VecEnv
 from stable_baselines3.common.utils import explained_variance
 
 
@@ -19,7 +18,7 @@ from agents.on_policy_algorithm import OnPolicyAlgorithm
 class SimpleAgent(OnPolicyAlgorithm):
     def __init__(
         self,
-        env: Union[gym.Env, VecEnv],
+        env: gym.Env,
         learning_rate: float = 1e-5,
         n_steps: int = 2048,
         batch_size: int = 64,

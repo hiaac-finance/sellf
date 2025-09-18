@@ -7,7 +7,6 @@ import torch
 import torch as th
 
 from stable_baselines3.common.utils import obs_as_tensor
-from stable_baselines3.common.vec_env import VecEnv
 
 from agents.buffers import RolloutBuffer, ReplayMemory
 from lending_experiment.agents.policy import Agent
@@ -17,7 +16,7 @@ from stable_baselines3.common.logger import Logger
 class OnPolicyAlgorithm:
     def __init__(
         self,
-        env: Union[gym.Env, VecEnv],
+        env: gym.Env,
         learning_rate: float,
         n_steps: int,
         gamma: float = 0.99,
@@ -40,10 +39,6 @@ class OnPolicyAlgorithm:
         self.device = device
         self.observation_space = env.observation_space
         self.action_space = env.action_space
-        if hasattr(env, "num_envs"):
-            self.n_envs = env.num_envs
-        else:
-            self.n_envs = 1
         self.learning_rate = learning_rate
         self._last_obs = None
         self._last_episode_starts = None
@@ -67,7 +62,6 @@ class OnPolicyAlgorithm:
             device=self.device,
             gamma=self.gamma,
             gae_lambda=self.gae_lambda,
-            n_envs=self.n_envs,
         )
 
         self.memory = ReplayMemory(
@@ -87,7 +81,7 @@ class OnPolicyAlgorithm:
 
     def collect_rollouts(
         self,
-        env: VecEnv,
+        env: gym.Env,
         rollout_buffer: RolloutBuffer,
         n_rollout_steps: int,
     ) -> None:
@@ -95,11 +89,11 @@ class OnPolicyAlgorithm:
         self.policy.eval()
 
         # first, predict for everyone in the pool
-        env.env_method("update_models")
+        env.update_models()
 
         if self._last_obs is None:
             self._last_obs = env.reset()
-            self._last_episode_starts = np.ones((env.num_envs,), dtype=bool)
+            self._last_episode_starts = np.ones((1), dtype=bool)
 
         n_steps = 0
         rollout_buffer.reset()
@@ -108,14 +102,13 @@ class OnPolicyAlgorithm:
 
             with th.no_grad():
                 # Convert to pytorch tensor or to TensorDict
-                obs_tensor = obs_as_tensor(self._last_obs, self.device)
+                obs_tensor = obs_as_tensor(self._last_obs, self.device).reshape(1, -1)
                 actions, values, log_probs, _ = self.policy.get_action_and_value(
                     obs_tensor
                 )
                 label_pred = self.policy.get_label(obs_tensor)
             actions = actions.cpu().numpy()
             label_pred = label_pred.cpu().numpy()
-
             # Rescale and perform action
             clipped_actions = actions
             # Clip the actions to avoid out of bound error
@@ -124,19 +117,19 @@ class OnPolicyAlgorithm:
                     actions, self.action_space.low, self.action_space.high
                 )
 
-            idx = env.get_attr("idx")[0]
-            data = env.get_attr("data")[0]
+            idx = env.idx
+            data = env.data
             label = np.array([data["label"][idx]]).astype(np.float32)
             group_idx = data["group"][idx]
             group = np.zeros(2, dtype=np.float32)
             group[group_idx] = 1
 
 
-            imputation = label if actions[0] == 1 else label_pred
+            imputation = label if actions == 1 else label_pred
 
             new_obs, rewards, dones, infos = env.step(clipped_actions)
 
-            self.num_timesteps += env.num_envs
+            self.num_timesteps += 1
 
             # self._update_info_buffer(infos)
             n_steps += 1
@@ -145,25 +138,16 @@ class OnPolicyAlgorithm:
                 # Reshape in case of discrete action
                 actions = actions.reshape(-1, 1)
 
-            # Handle timeout by bootstraping with value function
-            # see GitHub issue #633
-            for idx, done in enumerate(dones):
-                if (
-                    done
-                    and infos[idx].get("terminal_observation") is not None
-                    and infos[idx].get("TimeLimit.truncated", False)
-                ):
-                    terminal_obs = self.policy.obs_to_tensor(
-                        infos[idx]["terminal_observation"]
-                    )[0]
-                    with th.no_grad():
-                        terminal_value = self.policy.get_value(terminal_obs)[0]
-                    rewards[idx] += self.gamma * terminal_value
+            if dones:
+                with th.no_grad():
+                    terminal_value = self.policy.get_value(obs_as_tensor(new_obs, self.device)).cpu().numpy()
+                rewards += self.gamma * terminal_value
+                new_obs = env.reset()
 
-            delta = torch.tensor(np.array([env.get_attr("delta")[0]])).float()
-            delta_obs = torch.tensor(np.array([env.get_attr("delta_obs")])).float()
-            delta_delta = torch.tensor(np.array([env.get_attr("delta_delta")])).float()
-            delta_pred = torch.tensor(np.array([env.get_attr("delta_pred")])).float()
+            delta = torch.tensor(np.array([env.delta])).float()
+            delta_obs = torch.tensor(np.array([env.delta_obs])).float()
+            delta_delta = torch.tensor(np.array([env.delta_delta])).float()
+            delta_pred = torch.tensor(np.array([env.delta_pred])).float()
             rollout_buffer.add(
                 self._last_obs,
                 actions,

@@ -6,16 +6,13 @@ import torch as th
 import gym
 from gym import spaces
 
-from stable_baselines3.common.vec_env import VecEnv
-
-
 from lending_experiment.agents.on_policy_algorithm import OnPolicyAlgorithm
 
 
 class RRM(OnPolicyAlgorithm):
     def __init__(
         self,
-        env: Union[gym.Env, VecEnv],
+        env: gym.Env,
         learning_rate: float = 1e-5,
         n_steps: int = 2048,
         batch_size: int = 64,
@@ -37,13 +34,8 @@ class RRM(OnPolicyAlgorithm):
             seed=seed,
         )
 
-        if hasattr(env, "utility_method"):
-            self.utility_method = env.utility_method
-            self.cost = env.cost
-        else:
-            self.utility_method = env.get_attr("utility_method")[0]
-            self.cost = env.get_attr("cost")[0]
-
+        self.utility_method = env.utility_method
+        self.cost = env.cost
         self.batch_size = batch_size
         self.n_epochs = n_epochs
         self.beta_1 = beta_1
@@ -81,6 +73,10 @@ class RRM(OnPolicyAlgorithm):
         self.policy.train()
         criterion = torch.nn.BCELoss(reduction = "none")
         pred_losses = []
+        # get class weights for each label
+        labels = self.rollout_buffer.labels.reshape(-1)
+        weight_0 = 1 / (labels == 0).sum().item()
+        weight_1 = 1 / (labels == 1).sum().item() 
 
         # train for n_epochs epochs
         for epoch in range(self.n_epochs):
@@ -104,7 +100,7 @@ class RRM(OnPolicyAlgorithm):
                 fairness_cost = self.compute_fair_penalization(
                     loss, labels, groups
                 )
-                weights = (self.cost) * (labels) + (1 - self.cost) * (1 - labels)
+                weights = (self.cost) * weight_1 * (labels) + (1 - self.cost) * weight_0 * (1 - labels)
                 loss *= weights
                 loss = loss.mean() + self.beta_1 * fairness_cost
 
