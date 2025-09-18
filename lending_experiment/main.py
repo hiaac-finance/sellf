@@ -1,7 +1,3 @@
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import os
 import random
 import shutil
@@ -28,6 +24,7 @@ from lending_experiment.agents.ppo import PPO
 from lending_experiment.agents.pocar import POCAR
 from lending_experiment.agents.rrm import RRM
 from lending_experiment.agents.sellf import SELLF
+from lending_experiment.agents.simple_agent import SimpleAgent
 
 from lending_experiment.environments.resampling import (
     ResamplingEnv,
@@ -35,6 +32,7 @@ from lending_experiment.environments.resampling import (
     EnemEnv,
 )
 import argparse
+from omegaconf import OmegaConf
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 device = torch.device("cpu")
@@ -44,27 +42,9 @@ torch.cuda.empty_cache()
 import torch.multiprocessing as mp
 
 EXP_DIR = "./experiments"
-PARAMS_ALGO = {}
-PARAMS_ALGO["ppo"] = [{}]
-PARAMS_ALGO["rrm"] = [
-    {"beta_1": 0.0},
-    {"beta_1": 0.25},
-    {"beta_1": 0.5},
-    {"beta_1": 1},
-    {"beta_1": 2},
-    {"beta_1": 5},
-]
-PARAMS_ALGO["pocar"] = []
-for beta_1 in [0.5, 1, 5]:
-    for beta_2 in [0.0, 0.5, 1.0]:
-        PARAMS_ALGO["pocar"].append({"beta_1": beta_1, "beta_2": beta_2})
-PARAMS_ALGO["pocar_full"] = PARAMS_ALGO["pocar"]
-PARAMS_ALGO["sellf"] = PARAMS_ALGO["pocar"]
-PARAMS_ALGO["sellf_hard"] = PARAMS_ALGO["pocar"]
-
 
 def get_env(env_name: str, utility_method: str, algorithm: str) -> ResamplingEnv:
-    if algorithm in ["pocar_full", "ppo", "rrm"]:
+    if algorithm in ["pocar_full", "ppo", "rrm", "simple_agent"]:
         delta_method = "full"
     elif algorithm == "sellf":
         delta_method = "imputation"
@@ -72,7 +52,7 @@ def get_env(env_name: str, utility_method: str, algorithm: str) -> ResamplingEnv
         delta_method = "imputation_hard"
     else:
         delta_method = "accepted"
-    if env_name in ["fico", "fico_equal", "fico_hard", "setting1", "setting2"]:
+    if "fico" in env_name or "setting" in env_name:
         env = LendingEnv(
             utility_method=utility_method,
             delta_method=delta_method,
@@ -88,6 +68,15 @@ def get_env(env_name: str, utility_method: str, algorithm: str) -> ResamplingEnv
 def get_alg(env, config, device):
     if config["algorithm"] == "ppo":
         model = PPO(
+            env=env,
+            policy_kwargs={
+                "use_predictor": config["use_predictor"],
+            },
+            device=device,
+            **config["algorithm_params"],
+        )
+    elif config["algorithm"] == "simple_agent":
+        model = SimpleAgent(
             env=env,
             policy_kwargs={
                 "use_predictor": config["use_predictor"],
@@ -163,9 +152,9 @@ def evaluate(env, agent, seeds, eval_dir):
         while not done:
             obs = np.array(obs).reshape(1, -1)
             obs = torch.tensor(obs, dtype=torch.float32).to(device)
-            action = agent.policy.get_action(obs)
+            action = agent.get_action(obs)
             action = action.item()
-            pred = agent.policy.get_label(obs).item()
+            pred = agent.get_label(obs).item()
 
             # Logging
             group_id = env.data["group"][env.idx]
@@ -262,31 +251,33 @@ def main(config):
 
 if __name__ == "__main__":
     args = argparse.ArgumentParser()
-    # params are the env_name, the algorithm, and the mu_type
     args.add_argument("--env_name", type=str, default="fico")
     args.add_argument("--algorithm", type=str, default="ppo")
     args.add_argument("--mu_type", type=str, default="accuracy")
     args.add_argument("--train_timesteps", type=int, default=500_000)
+    args.add_argument("--n_jobs", type=int, default=1)
     args = args.parse_args()
 
-    params_list = PARAMS_ALGO[args.algorithm]
-
-    n_jobs = 9
-    # run experiment for each algorithm in separated proccess
+    # load config
+    base_config = OmegaConf.load("configs/base.yaml")
+    algo_config = OmegaConf.load(f"configs/{args.algorithm}.yaml")
+    config = OmegaConf.merge(base_config, algo_config)
+    
+    # create config list for multiprocessing
     config_list = []
-    for params in params_list:
-        params_str = " ".join([f"{k}={v}" for k, v in params.items()])
-        exp_name = args.algorithm + f"_{params_str}"
-        config = {
+    for i, params in enumerate(config.algorithm_param_list):
+        params = OmegaConf.merge(params, config.algorithm_param)
+        exp_name = args.algorithm + f"_exp{i}"
+        config_i = {
             "exp_name": exp_name,
             "env_name": args.env_name,
             "algorithm": args.algorithm,
-            "train_timesteps": args.train_timesteps,
             "mu_type": args.mu_type,
+            "train_timesteps": args.train_timesteps,
             "omega": 0.05,
             "algorithm_params": params,
         }
-        config_list.append(config)
+        config_list.append(config_i)
 
     mp.set_start_method("spawn")
     processes = []
@@ -294,10 +285,11 @@ if __name__ == "__main__":
         p = mp.Process(target=main, args=(config,))
         p.start()
         processes.append(p)
-        if len(processes) >= n_jobs:
+        if len(processes) >= args.n_jobs:
             for p in processes:
                 p.join()
             processes = []
 
     for p in processes:
         p.join()
+
