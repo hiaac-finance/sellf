@@ -33,7 +33,7 @@ class SELLF(OnPolicyAlgorithm):
         gae_lambda: float = 0.95,
         clip_range: float = 0.2,
         normalize_advantage: bool = True,
-        ent_coef: float = 0.2,
+        ent_coef: float = 0.,
         vf_coef: float = 0.5,
         max_grad_norm: float = 0.5,
         target_kl: Optional[float] = None,
@@ -80,7 +80,8 @@ class SELLF(OnPolicyAlgorithm):
         self.clip_range = clip_range
         self.normalize_advantage = normalize_advantage
         self.target_kl = target_kl
-        self.predictor_steps = 10
+        self.predictor_steps = 25
+        self.first_iter = True
 
         self._setup_model()
 
@@ -93,21 +94,38 @@ class SELLF(OnPolicyAlgorithm):
         actions = self.rollout_buffer.actions
         obs = self.rollout_buffer.observations[actions[:, 0, 0] == 1]
         labels = self.rollout_buffer.labels[actions[:, 0, 0] == 1]
+        groups = self.rollout_buffer.groups[actions[:, 0, 0] == 1]
 
-        self.memory.add(obs=obs, label=labels)
+        self.memory.add(obs=obs, label=labels, group = groups)
 
-        losses_hist = []
+        self.policy.save_history()
+
+        losses_hist=[]
+        reg_hist = []
         steps = 0
         for epoch in range(100):
             for i, rollout_data in enumerate(self.memory.get(self.batch_size)):
                 preds = self.policy.get_label_prob(rollout_data.observations)
                 with th.no_grad():
-                    prob_loan = self.policy.get_action_prob(rollout_data.observations)
-                    prob_loan = th.clamp(prob_loan, min=0.05, max=0.95)
+                    #prob_loan = self.policy.get_action_prob(rollout_data.observations)
+                    #prob_loan = th.clamp(prob_loan, min=0.05, max=1)
+                    #weights = (1 - prob_loan) / prob_loan
+                    prob_rej = 1 - self.policy.get_action_prob(rollout_data.observations)
+                    prob_accept_all = self.policy.get_action_all_prob(rollout_data.observations)
+                    weights = prob_rej / (prob_accept_all)
+
+
+                group_0_idx = (rollout_data.groups[:, 0] == 1).nonzero()
+                group_1_idx = (rollout_data.groups[:, 1] == 1).nonzero()
 
                 pred_loss = pred_criterion(preds, rollout_data.labels)
-                pred_loss = pred_loss * (1 / prob_loan)
-                pred_loss = pred_loss.sum() / (1 / prob_loan).sum()
+                pred_loss = pred_loss * weights
+
+                pred_loss = pred_loss[group_0_idx].sum() / weights[group_0_idx].sum() + pred_loss[group_1_idx].sum() / weights[group_1_idx].sum()
+                #pred_loss = pred_loss.sum() / weights.sum()
+
+                #print(weights[group_0_idx].sum(), weights[group_1_idx].sum())
+
                 losses_hist.append(pred_loss.item())
 
                 self.policy.pred_optimizer.zero_grad()
@@ -120,12 +138,15 @@ class SELLF(OnPolicyAlgorithm):
                     break
             
             self.policy.pred_scheduler.step()
+            self.logger.record("train/pred_lr", self.policy.pred_scheduler.get_last_lr()[0])
             if steps >= self.predictor_steps:
                 break
 
 
         mean_loss = np.mean(losses_hist)
+        reg_loss = np.mean(reg_hist) if len(reg_hist) > 0 else 0
         self.logger.record("train/pred_loss", mean_loss)
+        self.logger.record("train/pred_reg", reg_loss)
 
 
     def train(self) -> None:

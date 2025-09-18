@@ -323,7 +323,7 @@ class ResamplingEnv(gym.Env):
                 delta_pred = self.error_bound * (1 - accept_rate) / pred_rate
 
             if self.delta_method == "imputation_hard":
-                self.delta_pred = max(delta_pred[1], delta_pred[0])
+                self.delta_pred = abs(delta_pred[1]) + abs(delta_pred[0])
             else:
                 self.delta_pred = abs(delta_pred[1] - delta_pred[0])
 
@@ -459,7 +459,15 @@ class LendingEnv(ResamplingEnv):
         distributions: str = "fico",
         seed=None,
     ):
-        assert distributions in ["fico", "fico_equal", "fico_hard", "setting1", "setting2"]
+        assert distributions in [
+            "fico",
+            "fico_equal",
+            "fico_hard",
+            "fico_fast",
+            "fico_test",
+            "setting1",
+            "setting2",
+        ]
         self.n_groups = 2
         self.cost = cost
         self.n_applicants = n_applicants
@@ -496,6 +504,13 @@ class LendingEnv(ResamplingEnv):
                 data = pkl.load(f)
             cluster_probs = data["cluster_probabilities"]
             success_probs = data["success_probabilities"]
+        elif self.distributions == "fico_test":
+            group_probs = [0.5, 0.5]
+            with open("data/fico.pkl", "rb") as f:
+                data = pkl.load(f)
+            cluster_probs = data["cluster_probabilities"]
+            success_probs = data["success_probabilities"]
+            self.cost = 0.5
         elif self.distributions == "fico_hard":
             group_probs = [0.5, 0.5]
             with open("data/fico.pkl", "rb") as f:
@@ -673,14 +688,14 @@ class EnemEnv(ResamplingEnv):
     def __init__(
         self,
         cost: float = 0.5,
-        n_applicants: int = 10000,
+        n_applicants: int = 4_000,
         utility_method: str = "accuracy",
         delta_method: str = "full",
         seed=None,
     ):
         super().__init__(
             n_groups=2,
-            n_features=132,
+            n_features=128,
             cost=cost,
             n_applicants=n_applicants,
             utility_method=utility_method,
@@ -696,10 +711,9 @@ class EnemEnv(ResamplingEnv):
             self.model = pkl.load(f)
 
         def sample_label(x, g):
-            if not np.isscalar(g):
-                g = np.argmax(g)
-            x = np.array([x[0], g, *x[1:]])
-            p = self.model.predict_proba(x.reshape(1, -1))[0, 1]
+            p = self.model.predict_proba(x[:-1].reshape(1, -1))[0, 1]
+            gain = x[-1] * 0.3
+            p = min(gain + p, 1)
             return 1 if np.random.rand() < p else 0
 
         self.get_label = sample_label
@@ -718,19 +732,15 @@ class EnemEnv(ResamplingEnv):
             self.init_data["action"][i] = action
 
     def update_features(self, features, action, label):
-        if action == 1 or features[0] == 1:
-            # add marker that already passed
-            features[0] = 1
-            return features
+        if action == 1 or label == 1:
+            features[-1] += 1
 
-        group = np.argmax(features[1:3])
-        age_groups = 6
-        age = np.argmax(
-            features[(age_groups * group + 3) : (age_groups * (group + 1) + 3)]
-        )
+        group = features[0]
+        age_groups = 5
+        age = np.argmax(features[1 : 1 + age_groups])
         new_age = min(age + 1, age_groups - 1)
 
         new_features = features.copy()
-        new_features[age_groups * group + 3 : age_groups * (group + 1) + 3] = 0
-        new_features[age_groups * group + new_age + 3] = 1
+        new_features[1 + age] = 0
+        new_features[1 + new_age] = 1
         return new_features

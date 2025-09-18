@@ -230,7 +230,7 @@ def main(config):
     Path(eval_dir).mkdir(parents=True, exist_ok=True)
 
     # Get random seeds
-    eval_eps = 5
+    eval_eps = 10
     seeds = [random.randint(0, 10000) for _ in range(eval_eps)]
 
     with open(eval_dir + "/seeds.txt", "w") as f:

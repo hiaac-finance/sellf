@@ -46,36 +46,37 @@ class Agent(nn.Module):
         # The logit difference should be log(0.2 / 0.8)
         initial_prob = 0.2
         log_prob_ratio = np.log(initial_prob / (1 - initial_prob))
-        
+
         # The final layer is at index 4 in the nn.Sequential block
         # self.actor[4] is the layer_init(nn.Linear(64, 2), std=0.01)
-        self.actor[4].bias.data[0] = 0.0
-        self.actor[4].bias.data[1] = log_prob_ratio
+        # self.actor[4].bias.data[0] = 0.0
+        # self.actor[4].bias.data[1] = log_prob_ratio
         # ---- END MODIFICATION ----
 
-
-        #self.predictor = nn.Sequential(
+        # self.predictor = nn.Sequential(
         #    layer_init(nn.Linear(self.features_dim, 64)),
         #    nn.ReLU(),
         #    layer_init(nn.Linear(64, 64)),
         #    nn.ReLU(),
         #    layer_init(nn.Linear(64, 1), std=0.01),
-        #)
+        # )
         self.predictor = nn.Sequential(
             layer_init(nn.Linear(self.features_dim, 1), std=0.01),
         )
 
         self.pred_optimizer = torch.optim.Adam(
-            self.predictor.parameters(), lr=1e-3,
+            self.predictor.parameters(),
+            lr=1e-2,
         )
         self.pred_scheduler = lr_scheduler.ExponentialLR(
-            self.pred_optimizer, gamma=0.97
+            self.pred_optimizer, gamma=0.95
         )
         self.optimizer = torch.optim.Adam(
             list(self.actor.parameters()) + list(self.critic.parameters()),
             lr=learning_rate,
             eps=1e-5,
         )
+        self.actor_history = []
 
     @property
     def device(self) -> torch.device:
@@ -127,3 +128,26 @@ class Agent(nn.Module):
         log_odds = self.predictor(x)
         probs = torch.sigmoid(log_odds)
         return probs
+
+    def save_history(self) -> None:
+        """Add current actor to history and keep only the last 10."""
+        self.actor_history.append(
+            nn.Sequential(
+                layer_init(nn.Linear(self.features_dim, 64)),
+                nn.Tanh(),
+                layer_init(nn.Linear(64, 64)),
+                nn.Tanh(),
+                layer_init(nn.Linear(64, 2), std=0.01),
+            ).to(self.device)
+        )
+        self.actor_history[-1].load_state_dict(self.actor.state_dict())
+        if len(self.actor_history) > 20:
+            self.actor_history.pop(0)
+
+    def get_action_all_prob(self, x: torch.Tensor) -> torch.Tensor:
+        rej = torch.ones_like(x[:, 0])
+        for actor in self.actor_history:
+            logits = actor(x)
+            probs = Categorical(logits=logits)
+            rej = rej * (1 - probs.probs[:, 1])
+        return 1 - rej

@@ -32,7 +32,7 @@ class POCAR(OnPolicyAlgorithm):
         gae_lambda: float = 0.95,
         clip_range: float = 0.2,
         normalize_advantage: bool = True,
-        ent_coef: float = 0.0,
+        ent_coef: float = 0.,
         vf_coef: float = 0.5,
         max_grad_norm: float = 0.5,
         target_kl: Optional[float] = None,
