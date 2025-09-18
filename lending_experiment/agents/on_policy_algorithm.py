@@ -250,3 +250,19 @@ class OnPolicyAlgorithm:
         """
         self.policy.load_state_dict(torch.load(path + ".pth", map_location=self.device))
         self.policy.eval()
+
+    def get_action(self, observation: th.Tensor) -> th.Tensor:
+        """
+        Get the action according to the policy for a given observation
+        :param observation: the input observation
+        :return: the action to take
+        """
+        return self.policy.get_action(observation)
+
+    def get_label(self, observation: th.Tensor) -> th.Tensor:
+        """
+        Get the action according to the policy for a given observation
+        :param observation: the input observation
+        :return: the action to take
+        """
+        return self.policy.get_label(observation)
