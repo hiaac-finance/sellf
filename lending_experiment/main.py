@@ -9,6 +9,7 @@ os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
 import torch
 from stable_baselines3.common.callbacks import CheckpointCallback
 from stable_baselines3.common.logger import configure
@@ -23,6 +24,7 @@ from lending_experiment.agents.ppo import PPO
 from lending_experiment.agents.pocar import POCAR
 from lending_experiment.agents.rrm import RRM
 from lending_experiment.agents.sellf import SELLF
+from lending_experiment.agents.serew import SEREW
 from lending_experiment.agents.simple_agent import SimpleAgent
 
 from lending_experiment.environments.resampling import (
@@ -33,19 +35,18 @@ from lending_experiment.environments.resampling import (
 import argparse
 from omegaconf import OmegaConf
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-device = torch.device("cpu")
-print("Using device: ", device)
-torch.cuda.empty_cache()
 
 import torch.multiprocessing as mp
 
 EXP_DIR = "./experiments"
 
+
 def get_env(env_name: str, utility_method: str, algorithm: str) -> ResamplingEnv:
     if algorithm in ["pocar_full", "ppo", "rrm", "simple_agent"]:
         delta_method = "full"
     elif algorithm == "sellf":
+        delta_method = "imputation"
+    elif algorithm == "serew":
         delta_method = "imputation"
     elif algorithm == "sellf_hard":
         delta_method = "imputation_hard"
@@ -61,6 +62,8 @@ def get_env(env_name: str, utility_method: str, algorithm: str) -> ResamplingEnv
         )
     elif env_name == "enem":
         env = EnemEnv(utility_method=utility_method, delta_method=delta_method, seed=0)
+    if algorithm == "pocar_full":
+        env.next_disp = True
     return env
 
 
@@ -113,11 +116,21 @@ def get_alg(env, config, device):
             device=device,
             **config["algorithm_params"],
         )
+    elif config["algorithm"] == "serew":
+        model = SEREW(
+            env=env,
+            policy_kwargs={
+                "use_predictor": True,
+            },
+            omega=config["omega"],
+            device=device,
+            **config["algorithm_params"],
+        )
 
     return model
 
 
-def train(train_timesteps, env, save_dir, config):
+def train(train_timesteps, env, save_dir, config, device):
 
     env = PPOEnvWrapper(env=env)
     env = Monitor(env)
@@ -134,7 +147,73 @@ def train(train_timesteps, env, save_dir, config):
     model.save(save_dir + "/final_model")
 
 
-def evaluate(env, agent, seeds, eval_dir):
+def plot_learning(env_name, mu_type, alg_name):
+    df_log = pd.read_csv(
+        f"experiments/{env_name}/{mu_type}/{alg_name}/models/progress.csv"
+    )
+
+    # first, count the columns of the dataframe
+    columns = sorted(df_log.columns.tolist())
+
+    # separated columns that end with "g0" or "g1"
+    columns_g = [col for col in columns if col.endswith("g0") or col.endswith("g1")]
+    columns_g = sorted(columns_g)
+
+    columns = [col for col in columns if col not in columns_g]
+
+    # create pairs of sequential columns
+    columns_g = [columns_g[i : i + 2] for i in range(0, len(columns_g), 2)]
+
+    columns = columns + columns_g
+
+    n_rows = len(columns) // 5 + (len(columns) % 5 > 0)
+    n_cols = 5
+    fig, axs = plt.subplots(nrows=n_rows, ncols=n_cols, figsize=(13, int(3 * n_rows)))
+
+    axs = axs.flatten()
+
+    # add 0 if column is not present
+    for col in columns:
+        if isinstance(col, list):
+            for sub_col in col:
+                if sub_col not in df_log.columns:
+                    df_log[sub_col] = 0
+        else:
+            if col not in df_log.columns:
+                df_log[col] = 0
+
+    def rolling_mean(series, window=10):
+        return series.rolling(window=window, min_periods=1).mean()
+
+    for i, col in enumerate(columns):
+        if isinstance(col, list):
+            for j, sub_col in enumerate(col):
+                data = rolling_mean(df_log[sub_col])
+                axs[i].plot(data, label=sub_col)
+
+            title = col[0].replace("0", "_i").replace("1", "_i")
+            axs[i].set_title(title)
+        else:
+            data = rolling_mean(df_log[col])
+            axs[i].plot(data, label=col)
+            axs[i].set_title(col)
+
+        # if ylim contains 0, draw a line at 0
+        ylim = axs[i].get_ylim()
+        if ylim[0] * ylim[1] < 0:
+            axs[i].axhline(0, color="black", linestyle="--")
+
+        if col == "train/pred_lr":
+            axs[i].set_yscale("log")
+
+        axs[i].set_xlabel("Training Steps")
+        axs[i].set_ylabel("Value")
+        # axs[i].legend()
+    plt.tight_layout()
+    plt.savefig(f"experiments/{env_name}/{mu_type}/{alg_name}/models/learning.png")
+
+
+def evaluate(env, agent, seeds, eval_dir, device):
     eval_data = []
     num_eps = len(seeds)
     for ep in range(num_eps):
@@ -185,6 +264,14 @@ def evaluate(env, agent, seeds, eval_dir):
 
 
 def main(config):
+    os.environ["OMP_NUM_THREADS"] = "1"
+    os.environ["MKL_NUM_THREADS"] = "1"
+    os.environ["OPENBLAS_NUM_THREADS"] = "1"
+    os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+    torch.set_num_threads(1)
+
+    device = torch.device("cpu")
+
     start = time.time()
     with open("log.txt", "a") as f:
         f.write("\n-------------------------------------------------------------\n")
@@ -195,6 +282,7 @@ def main(config):
     exp_dir = (
         f"./experiments/{config['env_name']}/{config['mu_type']}/{config['exp_name']}"
     )
+    Path(exp_dir).mkdir(parents=True, exist_ok=True)
     save_dir = f"{exp_dir}/models"
     eval_dir = f"{exp_dir}/eval"
     config["use_predictor"] = config["algorithm"].find("sellf") != -1
@@ -210,8 +298,11 @@ def main(config):
         env=env,
         save_dir=save_dir,
         config=config,
+        device=device,
     )
 
+    plot_learning(config["env_name"], config["mu_type"], config["exp_name"])
+    
     # Initialize eval directory to store eval information
     shutil.rmtree(eval_dir, ignore_errors=True)
     Path(eval_dir).mkdir(parents=True, exist_ok=True)
@@ -236,6 +327,7 @@ def main(config):
         agent=agent,
         seeds=seeds,
         eval_dir=eval_dir,
+        device=device,
     )
 
     end = time.time()
@@ -260,12 +352,13 @@ if __name__ == "__main__":
     base_config = OmegaConf.load("configs/base.yaml")
     algo_config = OmegaConf.load(f"configs/{args.algorithm}.yaml")
     config = OmegaConf.merge(base_config, algo_config)
-    
+
     # create config list for multiprocessing
     config_list = []
     for i, params in enumerate(config.algorithm_param_list):
+        params_info = " ".join([f"{k}:{v}" for k, v in params.items()])
         params = OmegaConf.merge(params, config.algorithm_param)
-        exp_name = args.algorithm + f"_exp{i}"
+        exp_name = args.algorithm + f"({params_info})"
         config_i = {
             "exp_name": exp_name,
             "env_name": args.env_name,
@@ -290,4 +383,3 @@ if __name__ == "__main__":
 
     for p in processes:
         p.join()
-
