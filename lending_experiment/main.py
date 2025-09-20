@@ -35,9 +35,6 @@ from lending_experiment.environments.resampling import (
 import argparse
 from omegaconf import OmegaConf
 
-
-import torch.multiprocessing as mp
-
 EXP_DIR = "./experiments"
 
 
@@ -302,7 +299,7 @@ def main(config):
     )
 
     plot_learning(config["env_name"], config["mu_type"], config["exp_name"])
-    
+
     # Initialize eval directory to store eval information
     shutil.rmtree(eval_dir, ignore_errors=True)
     Path(eval_dir).mkdir(parents=True, exist_ok=True)
@@ -345,7 +342,7 @@ if __name__ == "__main__":
     args.add_argument("--algorithm", type=str, default="ppo")
     args.add_argument("--mu_type", type=str, default="accuracy")
     args.add_argument("--train_timesteps", type=int, default=500_000)
-    args.add_argument("--n_jobs", type=int, default=1)
+    args.add_argument("--config_id", type=int, default=0)
     args = args.parse_args()
 
     # load config
@@ -370,16 +367,10 @@ if __name__ == "__main__":
         }
         config_list.append(config_i)
 
-    mp.set_start_method("spawn")
-    processes = []
-    for config in config_list:
-        p = mp.Process(target=main, args=(config,))
-        p.start()
-        processes.append(p)
-        if len(processes) >= args.n_jobs:
-            for p in processes:
-                p.join()
-            processes = []
 
-    for p in processes:
-        p.join()
+    config = config_list[args.config_id]
+    main(config)
+
+
+
+    
