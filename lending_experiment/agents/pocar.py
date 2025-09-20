@@ -108,12 +108,12 @@ class POCAR(OnPolicyAlgorithm):
                 # Compute value-thresholding (vt) term as part of Eq. 3 from the paper
                 vt_term = th.min(
                     th.zeros(rollout_data.delta_obs.shape[0]).to(self.device),
-                    -rollout_data.delta_obs + th.tensor(self.omega, dtype=th.float32),
+                    -rollout_data.delta_obs.abs() + th.tensor(self.omega, dtype=th.float32),
                 )
 
                 # Compute decrease-in-violation (div) term as part of Eq. 3 from the paper
                 div_cond = th.where(
-                    rollout_data.delta_obs
+                    rollout_data.delta_obs.abs()
                     > th.tensor(self.omega, dtype=th.float32).to(self.device),
                     th.tensor(1, dtype=th.float32).to(self.device),
                     th.tensor(0, dtype=th.float32).to(self.device),

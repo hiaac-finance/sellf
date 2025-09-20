@@ -259,7 +259,7 @@ class ResamplingEnv(gym.Env):
             out=np.zeros_like(self.utility_sum),
         )
         old_delta = self.delta_obs
-        self.delta = abs(self.utility_values[1] - self.utility_values[0])
+        self.delta = self.utility_values[1] - self.utility_values[0]
         self.delta_obs = self.delta
         self.delta_pred = 0
 
@@ -283,9 +283,7 @@ class ResamplingEnv(gym.Env):
                 where=self.group_counts_obs != 0,
                 out=np.zeros_like(self.utility_sum_obs),
             )
-            self.delta_obs = abs(
-                self.utility_values_obs[1] - self.utility_values_obs[0]
-            )
+            self.delta_obs = self.utility_values_obs[1] - self.utility_values_obs[0]
 
         if "imputation" in self.delta_method:
             # calculate other necessary delta values
@@ -339,9 +337,9 @@ class ResamplingEnv(gym.Env):
                 delta_pred_real = (self.error_rejected) * (1 - accept_rate)
             else:
                 delta_pred_real = (self.error_rejected) * (1 - accept_rate) / pred_rate
-            self.delta_pred_real = abs(delta_pred_real[1] - delta_pred_real[0])
+            self.delta_pred_real = delta_pred_real[1] - delta_pred_real[0]
 
-        self.delta_delta = self.delta_obs - old_delta
+        self.delta_delta = abs(self.delta_obs) - abs(old_delta)
 
     def _get_observable_state(self):
         group = np.zeros(self.n_groups, dtype=np.float32)
