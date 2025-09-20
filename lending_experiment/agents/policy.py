@@ -39,27 +39,6 @@ class Agent(nn.Module):
             nn.Tanh(),
             layer_init(nn.Linear(64, 2), std=0.01),
         )
-
-        # ---- START MODIFICATION ----
-        # Adjust the bias of the actor's final layer to set the initial
-        # probability of action 1 to 0.2.
-        # The logit difference should be log(0.2 / 0.8)
-        initial_prob = 0.2
-        log_prob_ratio = np.log(initial_prob / (1 - initial_prob))
-
-        # The final layer is at index 4 in the nn.Sequential block
-        # self.actor[4] is the layer_init(nn.Linear(64, 2), std=0.01)
-        # self.actor[4].bias.data[0] = 0.0
-        # self.actor[4].bias.data[1] = log_prob_ratio
-        # ---- END MODIFICATION ----
-
-        # self.predictor = nn.Sequential(
-        #    layer_init(nn.Linear(self.features_dim, 64)),
-        #    nn.ReLU(),
-        #    layer_init(nn.Linear(64, 64)),
-        #    nn.ReLU(),
-        #    layer_init(nn.Linear(64, 1), std=0.01),
-        # )
         self.predictor = nn.Sequential(
             layer_init(nn.Linear(self.features_dim, 1), std=0.01),
         )

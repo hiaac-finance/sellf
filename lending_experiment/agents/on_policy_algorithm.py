@@ -107,6 +107,7 @@ class OnPolicyAlgorithm:
                     obs_tensor
                 )
                 label_pred = self.policy.get_label(obs_tensor)
+                prob_action_all = self.policy.get_action_all_prob(obs_tensor)
             actions = actions.cpu().numpy()
             label_pred = label_pred.cpu().numpy()
             # Rescale and perform action
@@ -163,6 +164,7 @@ class OnPolicyAlgorithm:
                 delta_obs,
                 delta_delta,
                 delta_pred,
+                prob_action_all,
             )
             self._last_obs = new_obs
             self._last_episode_starts = dones
@@ -184,7 +186,6 @@ class OnPolicyAlgorithm:
         self,
         total_timesteps: int,
     ) -> "OnPolicyAlgorithm":
-        pbar = tqdm(total=total_timesteps)
         self.num_timesteps = 0
         while self.num_timesteps < total_timesteps:
 
@@ -193,9 +194,7 @@ class OnPolicyAlgorithm:
             )
             self.logger.dump(step=self.num_timesteps)
             self.train()
-            pbar.update(self.n_steps)
 
-        # callback.on_training_end()
 
         return self
 

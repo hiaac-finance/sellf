@@ -260,9 +260,9 @@ class SELLF(OnPolicyAlgorithm):
                 # also minimize the Renyi divergence between the current policy and all previous policies
                 if self.beta_3 > 0:
                     prob_action = self.policy.get_action_prob(rollout_data.observations)
-                    prob_all_action = self.policy.get_action_all_prob(rollout_data.observations)
-                    ratio_all = (1 - prob_action) / (prob_all_action + 1e-8)
-                    renyi_div = th.mean(ratio_all[actions == 1] ** 2) 
+                    prob_action_all = self.policy.get_action_all_prob(rollout_data.observations)
+                    ratio_all = (1 - prob_action) / (prob_action_all + 1e-8)
+                    renyi_div = th.mean(ratio_all[actions == 1] ** 2)
                 else:
                     renyi_div = 0
 
