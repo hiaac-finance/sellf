@@ -173,6 +173,13 @@ class OnPolicyAlgorithm:
             # Compute value for the last timestep
             values = self.policy.get_value(obs_as_tensor(new_obs, self.device))
 
+        # if utlity method is qualification parity, shift delta_obs by one position back
+        if self.utility_method == "qualification":
+            rollout_buffer.delta_obs = torch.roll(rollout_buffer.delta_obs, shifts=-1, dims=0)
+            rollout_buffer.delta_obs[-1] = 0
+            rollout_buffer.delta_deltas = torch.roll(rollout_buffer.delta_deltas, shifts=-1, dims=0)
+            rollout_buffer.delta_deltas[-1] = 0
+
         rollout_buffer.compute_returns_and_advantage(last_values=values, dones=dones)
 
     def train(self) -> None:

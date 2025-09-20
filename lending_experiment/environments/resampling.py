@@ -34,6 +34,7 @@ class ResamplingEnv(gym.Env):
         self.utility_method = utility_method
         self.delta_method = delta_method
         self.action_space = spaces.Discrete(2)
+        self.next_disp = False
 
         resource_space = spaces.Box(
             low=0.0,
@@ -164,6 +165,9 @@ class ResamplingEnv(gym.Env):
 
             for i in range(self.n_groups):
                 # Calculate first the error on the rejected population
+                if len(self.pool_rejected[i]) == 0:
+                    self.error_rejected[i] = 0
+                    continue
                 group = np.zeros(
                     (len(self.pool_rejected[i]), self.n_groups), dtype=np.float32
                 )
