@@ -58,6 +58,7 @@ class SimpleAgent(OnPolicyAlgorithm):
             "all_deny",
             "accept_g0",
             "accept_g1",
+            "min_max",
         ]
         self.decision_type = decision_type
         self._setup_model()
@@ -82,5 +83,10 @@ class SimpleAgent(OnPolicyAlgorithm):
         elif self.decision_type == "accept_g1":
             group = observation[0, -1].item()
             action = 1 if group == 0 else 0
+        elif self.decision_type == "min_max":
+            # accept if group is the one with lowest utility
+            group = observation[0, -2:].argmax().item()
+            utility = self.env.utility_values
+            action = 1 if utility[group] == utility.min() else 0
         action = th.tensor([action], device=self.device)
         return action
