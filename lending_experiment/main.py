@@ -1,7 +1,3 @@
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import os
 import random
 import shutil
@@ -13,11 +9,11 @@ os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
 import torch
 from stable_baselines3.common.callbacks import CheckpointCallback
 from stable_baselines3.common.logger import configure
 from stable_baselines3.common.monitor import Monitor
-from stable_baselines3.common.vec_env import DummyVecEnv
 
 import sys
 
@@ -28,6 +24,7 @@ from lending_experiment.agents.ppo import PPO
 from lending_experiment.agents.pocar import POCAR
 from lending_experiment.agents.rrm import RRM
 from lending_experiment.agents.sellf import SELLF
+from lending_experiment.agents.simple_agent import SimpleAgent
 
 from lending_experiment.environments.resampling import (
     ResamplingEnv,
@@ -35,65 +32,43 @@ from lending_experiment.environments.resampling import (
     EnemEnv,
 )
 import argparse
-
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print("Using device: ", device)
-torch.cuda.empty_cache()
+from omegaconf import OmegaConf
 
 EXP_DIR = "./experiments"
 
-ALG_PARAMS = {}
-ALG_PARAMS["ppo"] = {"learning_rate": 1e-5}
-ALG_PARAMS["sellf"] = {
-    "learning_rate": 1e-5,
-    "beta_0": 1,
-    "beta_1": 1.0,
-    "beta_2": 1.0,
-    "beta_3": 0.5,
-}
-ALG_PARAMS["pocar_full"] = {
-    "learning_rate": 1e-5,
-    "beta_0": 1,
-    "beta_1": 0.5,
-    "beta_2": 0.5,
-}
-ALG_PARAMS["pocar"] = {
-    "learning_rate": 1e-5,
-    "beta_0": 1,
-    "beta_1": 0.5,
-    "beta_1": 0.5,
-}
-ALG_PARAMS["rrm"] = {
-    "learning_rate": 1e-5,
-    "beta_0": 0.5,
-}
-
 
 def get_env(env_name: str, utility_method: str, algorithm: str) -> ResamplingEnv:
-    if algorithm in ["pocar_full", "ppo", "rrm"]:
+    if algorithm in ["pocar_full", "ppo", "rrm", "simple_agent"]:
         delta_method = "full"
-    elif algorithm.find("sellf") != -1:
+    elif algorithm == "sellf":
         delta_method = "imputation"
     else:
         delta_method = "accepted"
-    if env_name == "fico":
-        env = LendingEnv(utility_method=utility_method, delta_method=delta_method)
-    elif env_name == "fico_equal":
+    if "fico" in env_name or "setting" in env_name:
         env = LendingEnv(
             utility_method=utility_method,
             delta_method=delta_method,
-            group_ratios="equal",
+            distributions=env_name,
+            n_applicants=4_000,
+            seed=0,
         )
     elif env_name == "enem":
-        env = EnemEnv(
-            n_features=130, utility_method=utility_method, delta_method=delta_method
-        )
+        env = EnemEnv(utility_method=utility_method, delta_method=delta_method, seed=0)
     return env
 
 
 def get_alg(env, config, device):
     if config["algorithm"] == "ppo":
         model = PPO(
+            env=env,
+            policy_kwargs={
+                "use_predictor": config["use_predictor"],
+            },
+            device=device,
+            **config["algorithm_params"],
+        )
+    elif config["algorithm"] == "simple_agent":
+        model = SimpleAgent(
             env=env,
             policy_kwargs={
                 "use_predictor": config["use_predictor"],
@@ -135,42 +110,108 @@ def get_alg(env, config, device):
     return model
 
 
-def train(train_timesteps, env, save_dir, config):
+def train(train_timesteps, env, save_dir, config, device):
 
     env = PPOEnvWrapper(env=env)
     env = Monitor(env)
-    env = DummyVecEnv([lambda: env])
 
     model = get_alg(env, config, device)
-    env.env_method("set_agent", model)
+    model.set_random_seed(0)
+    env.set_agent(model)
 
     shutil.rmtree(save_dir, ignore_errors=True)
     Path(save_dir).mkdir(parents=True, exist_ok=True)
 
-    model.set_logger(configure(folder=save_dir))
+    model.set_logger(configure(folder=save_dir, format_strings=["csv"]))
     model.learn(total_timesteps=train_timesteps)
     model.save(save_dir + "/final_model")
 
 
-def evaluate(env, agent, seeds, eval_dir):
+def plot_learning(env_name, mu_type, alg_name):
+    df_log = pd.read_csv(
+        f"experiments/{env_name}/{mu_type}/{alg_name}/models/progress.csv"
+    )
+
+    # first, count the columns of the dataframe
+    columns = sorted(df_log.columns.tolist())
+
+    # separated columns that end with "g0" or "g1"
+    columns_g = [col for col in columns if col.endswith("g0") or col.endswith("g1")]
+    columns_g = sorted(columns_g)
+
+    columns = [col for col in columns if col not in columns_g]
+
+    # create pairs of sequential columns
+    columns_g = [columns_g[i : i + 2] for i in range(0, len(columns_g), 2)]
+
+    columns = columns + columns_g
+
+    n_rows = len(columns) // 5 + (len(columns) % 5 > 0)
+    n_cols = 5
+    fig, axs = plt.subplots(nrows=n_rows, ncols=n_cols, figsize=(13, int(3 * n_rows)))
+
+    axs = axs.flatten()
+
+    # add 0 if column is not present
+    for col in columns:
+        if isinstance(col, list):
+            for sub_col in col:
+                if sub_col not in df_log.columns:
+                    df_log[sub_col] = 0
+        else:
+            if col not in df_log.columns:
+                df_log[col] = 0
+
+    def rolling_mean(series, window=10):
+        return series.rolling(window=window, min_periods=1).mean()
+
+    for i, col in enumerate(columns):
+        if isinstance(col, list):
+            for j, sub_col in enumerate(col):
+                data = rolling_mean(df_log[sub_col])
+                axs[i].plot(data, label=sub_col)
+
+            title = col[0].replace("0", "_i").replace("1", "_i")
+            axs[i].set_title(title)
+        else:
+            data = rolling_mean(df_log[col])
+            axs[i].plot(data, label=col)
+            axs[i].set_title(col)
+
+        # if ylim contains 0, draw a line at 0
+        ylim = axs[i].get_ylim()
+        if ylim[0] * ylim[1] < 0:
+            axs[i].axhline(0, color="black", linestyle="--")
+
+        if col == "train/pred_lr":
+            axs[i].set_yscale("log")
+
+        axs[i].set_xlabel("Training Steps")
+        axs[i].set_ylabel("Value")
+        # axs[i].legend()
+    plt.tight_layout()
+    plt.savefig(f"experiments/{env_name}/{mu_type}/{alg_name}/models/learning.png")
+
+
+def evaluate(env, agent, seeds, eval_dir, device):
     eval_data = []
     num_eps = len(seeds)
     for ep in range(num_eps):
         random.seed(seeds[ep])
         np.random.seed(seeds[ep])
         torch.manual_seed(seeds[ep])
+        env.seed(seeds[ep])
 
         env.update_models()
-
         obs = env.reset()
         done = False
         t = 0
         while not done:
             obs = np.array(obs).reshape(1, -1)
             obs = torch.tensor(obs, dtype=torch.float32).to(device)
-            action = agent.policy.get_action(obs)
+            action = agent.get_action(obs)
             action = action.item()
-            pred = agent.policy.get_label(obs).item()
+            pred = agent.get_label(obs).item()
 
             # Logging
             group_id = env.data["group"][env.idx]
@@ -203,34 +244,50 @@ def evaluate(env, agent, seeds, eval_dir):
 
 
 def main(config):
+    os.environ["OMP_NUM_THREADS"] = "1"
+    os.environ["MKL_NUM_THREADS"] = "1"
+    os.environ["OPENBLAS_NUM_THREADS"] = "1"
+    os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+    torch.set_num_threads(1)
+
+    device = torch.device("cpu")
+
     start = time.time()
-    with open("log.txt", "a") as f:
-        f.write("\n-------------------------------------------------------------\n")
-        f.write(f"Start time: {time.strftime('%H:%M:%S', time.localtime(start))}\n")
-        f.write(f"Environment: {config['env_name']}\n")
-        f.write(f"Algorithm: {config['algorithm']}\n")
-        f.write(f"Train Timesteps: {config['train_timesteps']}\n")
+    print("-------------------------------------------------------------")
+    print(f"Start time: {time.strftime('%H:%M:%S', time.localtime(start))}")
+    print(f"Config: {config}")
+    print("-------------------------------------------------------------")
 
     exp_dir = (
         f"./experiments/{config['env_name']}/{config['mu_type']}/{config['exp_name']}"
     )
+    Path(exp_dir).mkdir(parents=True, exist_ok=True)
     save_dir = f"{exp_dir}/models"
     eval_dir = f"{exp_dir}/eval"
     config["use_predictor"] = config["algorithm"].find("sellf") != -1
     env = get_env(config["env_name"], config["mu_type"], config["algorithm"])
+
+    # set seeds
+    random.seed(0)
+    np.random.seed(0)
+    torch.manual_seed(0)
+
     train(
         train_timesteps=config["train_timesteps"],
         env=env,
         save_dir=save_dir,
         config=config,
+        device=device,
     )
+
+    plot_learning(config["env_name"], config["mu_type"], config["exp_name"])
 
     # Initialize eval directory to store eval information
     shutil.rmtree(eval_dir, ignore_errors=True)
     Path(eval_dir).mkdir(parents=True, exist_ok=True)
 
     # Get random seeds
-    eval_eps = 5
+    eval_eps = 10
     seeds = [random.randint(0, 10000) for _ in range(eval_eps)]
 
     with open(eval_dir + "/seeds.txt", "w") as f:
@@ -241,6 +298,7 @@ def main(config):
     env = PPOEnvWrapper(env)
     agent = get_alg(env, config, device)
     agent.load(model_path)
+    agent.set_random_seed(0)
     env.set_agent(agent)
 
     evaluate(
@@ -248,31 +306,52 @@ def main(config):
         agent=agent,
         seeds=seeds,
         eval_dir=eval_dir,
+        device=device,
     )
 
     end = time.time()
-    with open("log.txt", "a") as f:
-        f.write(f"End time: {time.strftime('%H:%M:%S', time.localtime(end))}\n")
-        f.write(f"Took: {(end - start) / 60} minutes\n")
-        f.write("\n")
+    print("-------------------------------------------------------------")
+    print(f"End time: {time.strftime('%H:%M:%S', time.localtime(end))}")
+    print(f"Took: {(end - start) / 60} minutes")
+    print(f"Config: {config}")
+    print("-------------------------------------------------------------")
 
 
 if __name__ == "__main__":
     args = argparse.ArgumentParser()
-    # params are the env_name, the algorithm, and the mu_type
     args.add_argument("--env_name", type=str, default="fico")
     args.add_argument("--algorithm", type=str, default="ppo")
     args.add_argument("--mu_type", type=str, default="accuracy")
+    args.add_argument("--train_timesteps", type=int, default=500_000)
+    args.add_argument("--config_id", type=int, default=0)
     args = args.parse_args()
 
-    train_timesteps = 500_000
-    config = {
-        "exp_name": args.algorithm,
-        "env_name": args.env_name,
-        "algorithm": args.algorithm,
-        "train_timesteps": train_timesteps,
-        "mu_type": args.mu_type,
-        "omega": 0.05,
-        "algorithm_params": ALG_PARAMS[args.algorithm],
-    }
-    main(config)
+    # load config
+    base_config = OmegaConf.load("configs/base.yaml")
+    algo_config = OmegaConf.load(f"configs/{args.algorithm}.yaml")
+    config = OmegaConf.merge(base_config, algo_config)
+
+    # create config list for multiprocessing
+    config_list = []
+    for i, params in enumerate(config.algorithm_param_list):
+        params_info = " ".join([f"{k}:{v}" for k, v in params.items()])
+        params = OmegaConf.merge(params, config.algorithm_param)
+        exp_name = args.algorithm + f"({params_info})"
+        config_i = {
+            "exp_name": exp_name,
+            "env_name": args.env_name,
+            "algorithm": args.algorithm,
+            "mu_type": args.mu_type,
+            "train_timesteps": args.train_timesteps,
+            "omega": 0.05,
+            "algorithm_params": params,
+        }
+        config_list.append(config_i)
+
+    if args.config_id < len(config_list):
+        config = config_list[args.config_id]
+        main(config)
+
+
+
+    

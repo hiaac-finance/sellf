@@ -40,24 +40,22 @@ class Agent(nn.Module):
             layer_init(nn.Linear(64, 2), std=0.01),
         )
         self.predictor = nn.Sequential(
-            layer_init(nn.Linear(self.features_dim, 64)),
-            nn.ReLU(),
-            layer_init(nn.Linear(64, 64)),
-            nn.ReLU(),
-            layer_init(nn.Linear(64, 1), std=0.01),
+            layer_init(nn.Linear(self.features_dim, 1), std=0.01),
         )
 
         self.pred_optimizer = torch.optim.Adam(
-            self.predictor.parameters(), lr=1e-3,
+            self.predictor.parameters(),
+            lr=1e-2,
         )
         self.pred_scheduler = lr_scheduler.ExponentialLR(
-            self.pred_optimizer, gamma=0.97
+            self.pred_optimizer, gamma=0.95
         )
         self.optimizer = torch.optim.Adam(
             list(self.actor.parameters()) + list(self.critic.parameters()),
             lr=learning_rate,
             eps=1e-5,
         )
+        self.actor_history = []
 
     @property
     def device(self) -> torch.device:
@@ -90,6 +88,8 @@ class Agent(nn.Module):
 
     def get_label(self, x: torch.Tensor) -> torch.Tensor:
         if not self.use_predictor:
+            if x.dim == 1:
+                x = x.unsqueeze(0)
             return torch.zeros(x.size(0), dtype=torch.long, device=x.device)
         log_odds = self.predictor(x)
         probs = torch.sigmoid(log_odds)
@@ -109,3 +109,26 @@ class Agent(nn.Module):
         log_odds = self.predictor(x)
         probs = torch.sigmoid(log_odds)
         return probs
+
+    def save_history(self) -> None:
+        """Add current actor to history and keep only the last 10."""
+        if len(self.actor_history) >= 20:
+            return
+        self.actor_history.append(
+            nn.Sequential(
+                layer_init(nn.Linear(self.features_dim, 64)),
+                nn.Tanh(),
+                layer_init(nn.Linear(64, 64)),
+                nn.Tanh(),
+                layer_init(nn.Linear(64, 2), std=0.01),
+            ).to(self.device)
+        )
+        self.actor_history[-1].load_state_dict(self.actor.state_dict())
+
+    def get_action_all_prob(self, x: torch.Tensor) -> torch.Tensor:
+        rej = torch.ones_like(x[:, 0])
+        for actor in self.actor_history:
+            logits = actor(x)
+            probs = Categorical(logits=logits)
+            rej = rej * (1 - probs.probs[:, 1])
+        return 1 - rej

@@ -7,7 +7,6 @@ import torch
 import torch as th
 
 from stable_baselines3.common.utils import obs_as_tensor
-from stable_baselines3.common.vec_env import VecEnv
 
 from agents.buffers import RolloutBuffer, ReplayMemory
 from lending_experiment.agents.policy import Agent
@@ -17,7 +16,7 @@ from stable_baselines3.common.logger import Logger
 class OnPolicyAlgorithm:
     def __init__(
         self,
-        env: Union[gym.Env, VecEnv],
+        env: gym.Env,
         learning_rate: float,
         n_steps: int,
         gamma: float = 0.99,
@@ -40,15 +39,12 @@ class OnPolicyAlgorithm:
         self.device = device
         self.observation_space = env.observation_space
         self.action_space = env.action_space
-        if hasattr(env, "num_envs"):
-            self.n_envs = env.num_envs
-        else:
-            self.n_envs = 1
         self.learning_rate = learning_rate
         self._last_obs = None
         self._last_episode_starts = None
         self.seed = seed
         self.policy_kwargs = policy_kwargs
+        self.set_random_seed(seed)
 
     def set_random_seed(self, seed: Optional[int]) -> None:
         if seed is None:
@@ -66,11 +62,10 @@ class OnPolicyAlgorithm:
             device=self.device,
             gamma=self.gamma,
             gae_lambda=self.gae_lambda,
-            n_envs=self.n_envs,
         )
 
         self.memory = ReplayMemory(
-            10000,
+            300_000,
             self.observation_space,
             self.action_space,
             device=self.device,
@@ -86,19 +81,19 @@ class OnPolicyAlgorithm:
 
     def collect_rollouts(
         self,
-        env: VecEnv,
+        env: gym.Env,
         rollout_buffer: RolloutBuffer,
         n_rollout_steps: int,
     ) -> None:
-        if self._last_obs is None:
-            self._last_obs = env.reset()
-            self._last_episode_starts = np.ones((env.num_envs,), dtype=bool)
-
         # Switch to eval mode (this affects batch norm / dropout)
         self.policy.eval()
 
         # first, predict for everyone in the pool
-        env.env_method("update_models")
+        env.update_models()
+
+        if self._last_obs is None:
+            self._last_obs = env.reset()
+            self._last_episode_starts = np.ones((1), dtype=bool)
 
         n_steps = 0
         rollout_buffer.reset()
@@ -107,14 +102,14 @@ class OnPolicyAlgorithm:
 
             with th.no_grad():
                 # Convert to pytorch tensor or to TensorDict
-                obs_tensor = obs_as_tensor(self._last_obs, self.device)
+                obs_tensor = obs_as_tensor(self._last_obs, self.device).reshape(1, -1)
                 actions, values, log_probs, _ = self.policy.get_action_and_value(
                     obs_tensor
                 )
                 label_pred = self.policy.get_label(obs_tensor)
+                prob_action_all = self.policy.get_action_all_prob(obs_tensor)
             actions = actions.cpu().numpy()
             label_pred = label_pred.cpu().numpy()
-
             # Rescale and perform action
             clipped_actions = actions
             # Clip the actions to avoid out of bound error
@@ -123,19 +118,19 @@ class OnPolicyAlgorithm:
                     actions, self.action_space.low, self.action_space.high
                 )
 
-            idx = env.get_attr("idx")[0]
-            data = env.get_attr("data")[0]
+            idx = env.idx
+            data = env.data
             label = np.array([data["label"][idx]]).astype(np.float32)
             group_idx = data["group"][idx]
             group = np.zeros(2, dtype=np.float32)
             group[group_idx] = 1
 
 
-            imputation = label if actions[0] == 1 else label_pred
+            imputation = label if actions == 1 else label_pred
 
             new_obs, rewards, dones, infos = env.step(clipped_actions)
 
-            self.num_timesteps += env.num_envs
+            self.num_timesteps += 1
 
             # self._update_info_buffer(infos)
             n_steps += 1
@@ -144,25 +139,16 @@ class OnPolicyAlgorithm:
                 # Reshape in case of discrete action
                 actions = actions.reshape(-1, 1)
 
-            # Handle timeout by bootstraping with value function
-            # see GitHub issue #633
-            for idx, done in enumerate(dones):
-                if (
-                    done
-                    and infos[idx].get("terminal_observation") is not None
-                    and infos[idx].get("TimeLimit.truncated", False)
-                ):
-                    terminal_obs = self.policy.obs_to_tensor(
-                        infos[idx]["terminal_observation"]
-                    )[0]
-                    with th.no_grad():
-                        terminal_value = self.policy.get_value(terminal_obs)[0]
-                    rewards[idx] += self.gamma * terminal_value
+            if dones:
+                with th.no_grad():
+                    terminal_value = self.policy.get_value(obs_as_tensor(new_obs, self.device)).cpu().numpy()
+                rewards += self.gamma * terminal_value
+                new_obs = env.reset()
 
-            delta = torch.tensor(np.array([env.get_attr("delta")[0]])).float()
-            delta_obs = torch.tensor(np.array([env.get_attr("delta_obs")])).float()
-            delta_delta = torch.tensor(np.array([env.get_attr("delta_delta")])).float()
-            delta_pred = torch.tensor(np.array([env.get_attr("delta_pred")])).float()
+            delta = torch.tensor(np.array([env.delta])).float()
+            delta_obs = torch.tensor(np.array([env.delta_obs])).float()
+            delta_delta = torch.tensor(np.array([env.delta_delta])).float()
+            delta_pred = torch.tensor(np.array([env.delta_pred])).float()
             rollout_buffer.add(
                 self._last_obs,
                 actions,
@@ -178,6 +164,7 @@ class OnPolicyAlgorithm:
                 delta_obs,
                 delta_delta,
                 delta_pred,
+                prob_action_all,
             )
             self._last_obs = new_obs
             self._last_episode_starts = dones
@@ -185,6 +172,13 @@ class OnPolicyAlgorithm:
         with th.no_grad():
             # Compute value for the last timestep
             values = self.policy.get_value(obs_as_tensor(new_obs, self.device))
+
+        # if utlity method is qualification parity, shift delta_obs by one position back
+        if self.utility_method == "qualification":
+            rollout_buffer.delta_obs = torch.roll(rollout_buffer.delta_obs, shifts=-1, dims=0)
+            rollout_buffer.delta_obs[-1] = 0
+            rollout_buffer.delta_deltas = torch.roll(rollout_buffer.delta_deltas, shifts=-1, dims=0)
+            rollout_buffer.delta_deltas[-1] = 0
 
         rollout_buffer.compute_returns_and_advantage(last_values=values, dones=dones)
 
@@ -199,8 +193,8 @@ class OnPolicyAlgorithm:
         self,
         total_timesteps: int,
     ) -> "OnPolicyAlgorithm":
-        pbar = tqdm(total=total_timesteps)
         self.num_timesteps = 0
+        #pbar = tqdm(total=total_timesteps)
         while self.num_timesteps < total_timesteps:
 
             self.collect_rollouts(
@@ -208,9 +202,8 @@ class OnPolicyAlgorithm:
             )
             self.logger.dump(step=self.num_timesteps)
             self.train()
-            pbar.update(self.n_steps)
+            #pbar.update(self.n_steps)
 
-        # callback.on_training_end()
 
         return self
 
@@ -249,3 +242,19 @@ class OnPolicyAlgorithm:
         """
         self.policy.load_state_dict(torch.load(path + ".pth", map_location=self.device))
         self.policy.eval()
+
+    def get_action(self, observation: th.Tensor) -> th.Tensor:
+        """
+        Get the action according to the policy for a given observation
+        :param observation: the input observation
+        :return: the action to take
+        """
+        return self.policy.get_action(observation)
+
+    def get_label(self, observation: th.Tensor) -> th.Tensor:
+        """
+        Get the action according to the policy for a given observation
+        :param observation: the input observation
+        :return: the action to take
+        """
+        return self.policy.get_label(observation)

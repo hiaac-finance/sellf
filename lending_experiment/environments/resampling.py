@@ -23,6 +23,7 @@ class ResamplingEnv(gym.Env):
         n_features: int = 10,
         utility_method: str = "accuracy",
         delta_method: str = "full",
+        seed=None,
     ):
         assert utility_method in ["accuracy", "qualification", "tpr"]
         assert delta_method in ["full", "imputation", "accepted"]
@@ -67,25 +68,29 @@ class ResamplingEnv(gym.Env):
                 ]
             ]
         )
-        self.init_data["features"] = np.zeros((self.n_applicants, self.n_features), dtype=np.float32)
+        self.init_data["features"] = np.zeros(
+            (self.n_applicants, self.n_features), dtype=np.float32
+        )
         self.init_data["group"] = self.init_data["group"].astype(np.int32)
         self.data = deepcopy(self.init_data)
-        self.pool_accepted = [[] for _ in range(self.n_groups)]
         self.timestep = 0
 
-        self.get_label_pred = lambda x, g : 0
-        self.get_action = lambda x, g : 0
-        self.get_action_prob = lambda x, g : 0
-        self.get_action_prob_list = lambda x, g : 0
-        self.get_action_prob_batch = lambda x, g : 0
-        self.get_pred_batch = lambda x, g : 0
+        self.get_label_pred = lambda x, g: 0
+        self.get_action = lambda x, g: 0
+        self.get_action_prob = lambda x, g: 0
+        self.get_action_prob_list = lambda x, g: 0
+        self.get_action_prob_batch = lambda x, g: 0
+        self.get_pred_batch = lambda x, g: 0
+        self.delta = 0
         self.delta_obs = 0
-        self.error_bound = [0, 0]
-        self.error_accepted = [0, 0]
-        self.chi_divergence = [0, 0]
-        
+        self.error_rejected = [0, 0]
+        self.seed(seed)
         self._load_data()
         self._state_init()
+
+    def seed(self, seed=None):
+        np.random.seed(seed)
+        return [seed]
 
     def _load_data(self):
         """This function should fill the entries in self.init_data"""
@@ -100,11 +105,9 @@ class ResamplingEnv(gym.Env):
         self.idx = selected
         return
 
-    def reset(self, update_models=False):
+    def reset(self):
         """Resets the environment."""
         self.timestep = 0
-        if update_models:
-            self.update_models()
         self.data = deepcopy(self.init_data)
         self._state_init()
         self.compute_disparity()
@@ -120,67 +123,6 @@ class ResamplingEnv(gym.Env):
             self.init_data["pred"][idx] = pred
             self.init_data["action"][idx] = action
             self.update_utility(idx, label, pred, action, init=True)
-
-        if self.delta_method == "imputation":
-            # update accepted pool
-            # Calculate "one_minus_pi" of new accepted individuals
-            for i in range(self.n_groups):
-                group = np.zeros(self.n_groups)
-                group[i] = 1
-                for j in range(len(self.pool_accepted[i])):
-                    if self.pool_accepted[i][j]["one_minus_pi"] is None:
-                        features = self.pool_accepted[i][j]["features"]
-                        prob_list = self.get_action_prob_list(features, group)
-                        self.pool_accepted[i][j]["one_minus_pi"] = np.prod(
-                            [1 - x for x in prob_list]
-                        )
-
-            # Here I need to calculate the error_bound, that is the error of the predictor plus
-            # the Chi Squared divergence term
-
-            self.error_accepted = np.zeros(self.n_groups)
-            self.chi_divergence = np.zeros(self.n_groups)
-
-            if len(self.pool_accepted[0]) == 0 or len(self.pool_accepted[1]) == 0:
-                return
-
-            for i in range(self.n_groups):
-                # Create a large dataset of accepted applicants
-                group = np.zeros(
-                    (len(self.pool_accepted[i]), self.n_groups), dtype=np.float32
-                )
-                group[:, i] = 1
-                features = np.array(
-                    [applicant["features"] for applicant in self.pool_accepted[i]]
-                )
-
-                # Calculate the error of the updated classifier on the accepted population
-                labels = np.array(
-                    [applicant["label"] for applicant in self.pool_accepted[i]]
-                )
-                preds = self.get_pred_batch(features, group)
-                self.error_accepted[i] = (preds - labels).mean()
-
-                # Calculate the chi_divergence
-                one_minus_pi = self.get_action_prob_batch(features, group)
-                one_minus_pi_hist = np.array(
-                    [applicant["one_minus_pi"] for applicant in self.pool_accepted[i]]
-                )
-                one_minus_pi_hist *= one_minus_pi
-
-                # Save new one_minus_pi_hist
-                for j in range(len(self.pool_accepted[i])):
-                    self.pool_accepted[i][j]["one_minus_pi"] = one_minus_pi_hist[j]
-
-                one_minus_pi_hist = 1 - one_minus_pi_hist
-                q = one_minus_pi_hist.mean()
-                r = one_minus_pi.mean()
-
-                w = (q / r) * (one_minus_pi / one_minus_pi_hist)
-
-                self.chi_divergence[i] = np.mean((w - 1) ** 2)
-
-            self.error_bound = self.error_accepted + self.chi_divergence
 
     def compute_disparity(self):
         # calculate disparity using self.data
@@ -208,12 +150,11 @@ class ResamplingEnv(gym.Env):
             out=np.zeros_like(self.utility_sum),
         )
         old_delta = self.delta_obs
-        self.delta = abs(self.utility_values[1] - self.utility_values[0])
+        self.delta = self.utility_values[1] - self.utility_values[0]
         self.delta_obs = self.delta
-        self.delta_delta = self.delta_obs - old_delta
         self.delta_pred = 0
 
-        if self.delta_method == "accepted" or self.delta_method == "imputation":
+        if "accepted" in self.delta_method or "imputation" in self.delta_method:
             self.data["utility_obs"] *= self.data["active_obs"]
             self.group_counts_obs = np.array(
                 [
@@ -233,11 +174,9 @@ class ResamplingEnv(gym.Env):
                 where=self.group_counts_obs != 0,
                 out=np.zeros_like(self.utility_sum_obs),
             )
-            self.delta_obs = abs(
-                self.utility_values_obs[1] - self.utility_values_obs[0]
-            )
+            self.delta_obs = self.utility_values_obs[1] - self.utility_values_obs[0]
 
-        if self.delta_method == "imputation":
+        if "imputation" in self.delta_method:
             # calculate other necessary delta values
             group_counts = np.array(
                 [np.sum(self.data["group"] == i) for i in range(self.n_groups)]
@@ -255,9 +194,13 @@ class ResamplingEnv(gym.Env):
                 out=np.zeros_like(accept_sum),
             )
 
+            imputation = (
+                self.data["action"] * self.data["label"]
+                + (1 - self.data["action"]) * self.data["pred"]
+            )
             pred_sum = np.array(
                 [
-                    np.sum(self.data["pred"][self.data["group"] == i])
+                    np.sum(imputation[self.data["group"] == i])
                     for i in range(self.n_groups)
                 ]
             )
@@ -268,17 +211,34 @@ class ResamplingEnv(gym.Env):
                 out=np.zeros_like(pred_sum),
             )
 
-            # here, the error bound will already be calculated
-            delta_pred = np.zeros(self.n_groups)
-            if self.utility_method in ["qualification", "accuracy"]:
-                delta_pred = self.error_bound * (1 - accept_rate)
-            else:
-                delta_pred = self.error_bound * (1 - accept_rate) / pred_rate
+            # calculate error rates
+            error = self.data["pred"] - self.data["label"]
+            error_rejected = error * (1 - self.data["action"])
+            error_rejected = np.array(
+                [
+                    np.sum(error_rejected[self.data["group"] == i])
+                    for i in range(self.n_groups)
+                ]
+            )
+            self.error_rejected = np.true_divide(
+                error_rejected,
+                accept_sum,
+                where=accept_sum != 0,
+                out=np.zeros_like(error_rejected),
+            )
+                
 
-            self.delta_pred = abs(delta_pred[1] - delta_pred[0])
+            delta_pred_real = np.zeros(self.n_groups)
+            if self.utility_method in ["qualification", "accuracy"]:
+                delta_pred_real = (self.error_rejected) * (1 - accept_rate)
+            else:
+                delta_pred_real = (self.error_rejected) * (1 - accept_rate) / pred_rate
+            self.delta_pred_real = delta_pred_real[1] - delta_pred_real[0]
+
+        self.delta_delta = abs(self.delta_obs) - abs(old_delta)
 
     def _get_observable_state(self):
-        group = np.zeros(self.n_groups, dtype = np.float32)
+        group = np.zeros(self.n_groups, dtype=np.float32)
         group[int(self.data["group"][self.idx])] = 1
         return {
             "resource": np.array(self.resource),
@@ -292,25 +252,13 @@ class ResamplingEnv(gym.Env):
     def step(self, action):
         self.timestep += 1
         old_resource = self.resource
-        group = self.data["group"][self.idx]
-        features = self.data["features"][self.idx]
         label = self.data["label"][self.idx]
         pred = self.data["pred"][self.idx]
-
-        if action == 1 and len(self.pool_accepted[group]) < 20_000:
-            self.pool_accepted[group].append(
-                {
-                    "features": features,
-                    "label": label,
-                    "one_minus_pi": None,
-                }
-            )
         self.update_resource(action, label)
         # Update utility based on this action for this applicant
         self.update_utility(self.idx, label, pred, action)
         # Update resource with action
         self.compute_disparity()
-        # Update features of applicant based on action
         self.update_applicant(self.idx, action)
         self.sample_applicant()
         observation = self._get_observable_state()
@@ -341,7 +289,7 @@ class ResamplingEnv(gym.Env):
             utility_obs = utility_value
             active_obs = active if action == 1 else 0
 
-        if self.delta_method == "imputation":
+        if "imputation" in self.delta_method:
             active_obs = 1
             label_obs = label if action == 1 else pred
             if self.utility_method == "accuracy":
@@ -373,8 +321,7 @@ class ResamplingEnv(gym.Env):
         self.data["pred"][idx] = pred
         self.data["action"][idx] = action
 
-
-    def update_features(self, features, action):
+    def update_features(self, features, action, label):
         return features
 
 
@@ -389,16 +336,27 @@ class LendingEnv(ResamplingEnv):
         n_applicants: int = 10000,
         utility_method: str = "accuracy",
         delta_method: str = "full",
-        group_ratios: str = "data",
+        distributions: str = "fico",
+        seed=None,
     ):
-        assert group_ratios in ["data", "equal"]
+        assert distributions in [
+            "fico",
+            "fico_equal",
+            "fico_hard",
+            "fico_fast",
+            "fico_test",
+            "setting1",
+            "setting2",
+        ]
         self.n_groups = 2
         self.cost = cost
         self.n_applicants = n_applicants
         self.n_features = 10
+        if "setting" in distributions:
+            self.n_features = 14
         self.utility_method = utility_method
         self.delta_method = delta_method
-        self.group_ratios = group_ratios
+        self.distributions = distributions
         super().__init__(
             n_groups=self.n_groups,
             cost=self.cost,
@@ -406,23 +364,164 @@ class LendingEnv(ResamplingEnv):
             n_features=self.n_features,
             utility_method=self.utility_method,
             delta_method=self.delta_method,
+            seed=seed,
         )
 
+    def _load_probs(self):
+        shift_probs = [
+            [0, 1, 0],
+            [0, 1, 0],
+        ]
+        if self.distributions == "fico":
+            with open("data/fico.pkl", "rb") as f:
+                data = pkl.load(f)
+            group_probs = data["group_likelihoods"]
+            cluster_probs = data["cluster_probabilities"]
+            success_probs = data["success_probabilities"]
+        elif self.distributions == "fico_equal":
+            group_probs = [0.5, 0.5]
+            with open("data/fico.pkl", "rb") as f:
+                data = pkl.load(f)
+            cluster_probs = data["cluster_probabilities"]
+            success_probs = data["success_probabilities"]
+        elif self.distributions == "fico_test":
+            group_probs = [0.5, 0.5]
+            with open("data/fico.pkl", "rb") as f:
+                data = pkl.load(f)
+            cluster_probs = data["cluster_probabilities"]
+            success_probs = data["success_probabilities"]
+            self.cost = 0.5
+        elif self.distributions == "fico_hard":
+            group_probs = [0.5, 0.5]
+            with open("data/fico.pkl", "rb") as f:
+                data = pkl.load(f)
+            cluster_probs = data["cluster_probabilities"]
+            success_probs = data["success_probabilities"]
+            shift_probs = [
+                [0.25, 0.7, 0.05],
+                [0.05, 0.85, 0.1],
+            ]
+        elif self.distributions == "setting1":
+            group_probs = [0.5, 0.5]
+            cluster_probs = [
+                [
+                    0.0,
+                    0.0,
+                    0.05,
+                    0.05,
+                    0.05,
+                    0.05,
+                    0.1,
+                    0.1,
+                    0.15,
+                    0.15,
+                    0.15,
+                    0.15,
+                    0.0,
+                    0.0,
+                ],
+                [
+                    0.05,
+                    0.05,
+                    0.05,
+                    0.05,
+                    0.1,
+                    0.1,
+                    0.15,
+                    0.15,
+                    0.15,
+                    0.15,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                ],
+            ]
+            success_probs = [
+                0.773,
+                0.804,
+                0.833,
+                0.857,
+                0.879,
+                0.898,
+                0.914,
+                0.928,
+                0.939,
+                0.949,
+                0.958,
+                0.965,
+                0.970,
+                0.975,
+            ]
+            success_probs = [success_probs, success_probs]
+        elif self.distributions == "setting2":
+            group_probs = [0.5, 0.5]
+            cluster_probs = [
+                [
+                    0.0,
+                    0.0,
+                    0.05,
+                    0.05,
+                    0.05,
+                    0.05,
+                    0.1,
+                    0.1,
+                    0.15,
+                    0.15,
+                    0.15,
+                    0.15,
+                    0.0,
+                    0.0,
+                ],
+                [
+                    0.05,
+                    0.05,
+                    0.05,
+                    0.05,
+                    0.1,
+                    0.1,
+                    0.15,
+                    0.15,
+                    0.15,
+                    0.15,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                ],
+            ]
+            success_probs = [
+                0.506,
+                0.594,
+                0.677,
+                0.750,
+                0.812,
+                0.861,
+                0.898,
+                0.927,
+                0.948,
+                0.963,
+                0.974,
+                0.982,
+                0.987,
+                0.991,
+            ]
+            success_probs = [success_probs, success_probs]
+
+        return group_probs, cluster_probs, success_probs, shift_probs
+
     def _load_data(self):
-        with open("data/fico.pkl", "rb") as f:
-            data = pkl.load(f)
-        if self.group_ratios == "data":
-            groups_probs = data["group_likelihoods"]
-        else:
-            groups_probs = [0.5, 0.5]
-        cluster_probs = data["cluster_probabilities"]
-        success_probs = data["success_probabilities"]
+        groups_probs, cluster_probs, success_probs, shift_probs = self._load_probs()
 
         def sample_label(x, g):
             # if x is not an scalar, get the argmax
             if not np.isscalar(x):
                 x = np.argmax(x)
-            return np.random.binomial(n=1, p=success_probs[g][x])
+            y = np.random.binomial(n=1, p=success_probs[g][x])
+            shift_prob = shift_probs[g]
+            options = [0, y, 1]
+            y = np.random.choice(options, p=shift_prob)
+            return y
 
         self.get_label = sample_label
 
@@ -445,7 +544,6 @@ class LendingEnv(ResamplingEnv):
             self.init_data["label"][i] = label
             self.init_data["pred"][i] = pred
             self.init_data["action"][i] = action
-    
 
     def update_features(self, features, action, label):
         if action == 0:
@@ -461,35 +559,71 @@ class LendingEnv(ResamplingEnv):
         features[new_score] = 1
         return features
 
+
 class EnemEnv(ResamplingEnv):
     """
     Environment for school admission experiments.
     """
 
+    def __init__(
+        self,
+        cost: float = 0.5,
+        n_applicants: int = 4_000,
+        utility_method: str = "accuracy",
+        delta_method: str = "full",
+        seed=None,
+    ):
+        super().__init__(
+            n_groups=2,
+            n_features=128,
+            cost=cost,
+            n_applicants=n_applicants,
+            utility_method=utility_method,
+            delta_method=delta_method,
+            seed=seed,
+        )
+
     def _load_data(self):
         with open("data/enem_pool.pkl", "rb") as f:
-            self.init_data = pkl.load(f)
+            pool = pkl.load(f)
 
         with open("data/enem_model.pkl", "rb") as f:
             self.model = pkl.load(f)
 
-        def sample_label(x):
-            p = self.model.predict_proba(x.reshape(1, -1))[0, 1]
+        def sample_label(x, g):
+            p = self.model.predict_proba(x[:-1].reshape(1, -1))[0, 1]
+            gain = x[-1] * 1
+            p = min(gain + p, 1)
             return 1 if np.random.rand() < p else 0
 
-        self.label_fn = sample_label
+        self.get_label = sample_label
 
-    def updated_features(self, features, action, label):
-        if action == 1:
-            return
-        age_groups = 6
-        age_argmax = np.argmax(features)
-        group = 1 if age_argmax >= age_groups else 0
-        age_features = features[(age_groups * group) : (age_groups * (group + 1))]
-        age = np.argmax(age_features)
+        for i in range(self.n_applicants):
+            group = pool[i]["group"]
+            features = pool[i]["features"]
+
+            label = self.get_label(features, group)
+            pred = self.get_label_pred(features, group)
+            action = self.get_action(features, group)
+            self.init_data["group"][i] = group
+            self.init_data["features"][i] = features
+            self.init_data["label"][i] = label
+            self.init_data["pred"][i] = pred
+            self.init_data["action"][i] = action
+
+    def update_features(self, features, action, label):
+        if action == 1 or label == 1:
+            features[-1] = 1
+
+        group = features[0]
+        age_groups = 2
+        age = np.argmax(features[1 : 1 + age_groups])
         new_age = min(age + 1, age_groups - 1)
 
         new_features = features.copy()
-        new_features[int(age_groups * group + age)] = 0
-        new_features[int(age_groups * group + new_age)] = 1
+        new_features[1 + age] = 0
+        new_features[1 + new_age] = 1
         return new_features
+
+    def _is_done(self):
+        return self.resource <= 0 or self.timestep >= 2048

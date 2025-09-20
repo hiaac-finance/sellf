@@ -45,11 +45,13 @@ class RolloutBufferSamples(NamedTuple):
     delta_obs: th.Tensor
     delta_preds: th.Tensor
     delta_deltas: th.Tensor
+    prob_action_all: th.Tensor
 
 
 class ReplayMemorySamples(NamedTuple):
     observations: th.Tensor
     labels: th.Tensor
+    groups: th.Tensor
 
 
 class BaseBuffer(ABC):
@@ -256,6 +258,9 @@ class RolloutBuffer(BaseBuffer):
         self.delta_obs = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
         self.delta_deltas = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
         self.delta_preds = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
+        self.prob_action_all = np.zeros(
+            (self.buffer_size, self.n_envs, self.action_dim), dtype=np.float32
+        )
         self.generator_ready = False
         super(RolloutBuffer, self).reset()
 
@@ -316,6 +321,7 @@ class RolloutBuffer(BaseBuffer):
         delta_obs: th.Tensor,
         delta_delta: th.Tensor,
         delta_preds: th.Tensor,
+        prob_action_all: th.Tensor,
     ) -> None:
         """
         :param obs: Observation
@@ -350,6 +356,7 @@ class RolloutBuffer(BaseBuffer):
         self.delta_obs[self.pos] = delta_obs.clone().cpu().numpy()
         self.delta_deltas[self.pos] = delta_delta.clone().cpu().numpy()
         self.delta_preds[self.pos] = delta_preds.clone().cpu().numpy()
+        self.prob_action_all[self.pos] = prob_action_all.clone().cpu().numpy()
         self.pos += 1
         if self.pos == self.buffer_size:
             self.full = True
@@ -377,6 +384,7 @@ class RolloutBuffer(BaseBuffer):
                 "delta_obs",
                 "delta_deltas",
                 "delta_preds",
+                "prob_action_all",
             ]
 
             for tensor in _tensor_names:
@@ -410,6 +418,7 @@ class RolloutBuffer(BaseBuffer):
             self.delta_obs[batch_inds].flatten(),
             self.delta_deltas[batch_inds].flatten(),
             self.delta_preds[batch_inds].flatten(),
+            self.prob_action_all[batch_inds].flatten(),
         )
         return RolloutBufferSamples(*tuple(map(self.to_torch, data)))
 
@@ -435,17 +444,21 @@ class ReplayMemory(BaseBuffer):
     def reset(self) -> None:
         self.observations = np.zeros((0,) + self.obs_shape, dtype=np.float32)
         self.labels = np.zeros((0, 1), dtype=np.float32)
+        self.groups = np.zeros((0, 2), dtype=np.float32)
         self.pos = 0
 
-    def add(self, obs: np.ndarray, label: np.ndarray) -> None:
+    def add(self, obs: np.ndarray, label: np.ndarray, group : np.ndarray) -> None:
         # this function should concatenate the old and the new data, and
         # sample the new data to the original size
 
         if obs.shape[1] == 1:
             obs = obs.squeeze(axis=1)
+        if group.shape[1] == 1:
+            group = group.squeeze(axis=1)
 
         self.observations = np.concatenate((self.observations, obs), axis=0)
         self.labels = np.concatenate((self.labels, label), axis=0)
+        self.groups = np.concatenate((self.groups, group), axis=0)
 
         if self.observations.shape[0] > self.buffer_size:
             indices = np.random.choice(
@@ -455,6 +468,7 @@ class ReplayMemory(BaseBuffer):
             )
             self.observations = self.observations[indices]
             self.labels = self.labels[indices]
+            self.groups = self.groups[indices]
 
     def get(
         self, batch_size: Optional[int] = None
@@ -467,6 +481,7 @@ class ReplayMemory(BaseBuffer):
             _tensor_names = [
                 "observations",
                 "labels",
+                "groups",
             ]
 
             # for tensor in _tensor_names:
@@ -488,5 +503,6 @@ class ReplayMemory(BaseBuffer):
         data = (
             self.observations[batch_inds],
             self.labels[batch_inds],
+            self.groups[batch_inds],
         )
         return ReplayMemorySamples(*tuple(map(self.to_torch, data)))

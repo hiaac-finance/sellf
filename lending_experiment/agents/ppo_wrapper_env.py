@@ -96,7 +96,7 @@ class PPOEnvWrapper(gym.Wrapper):
         data = np.concatenate([features, group], axis=1)
         data = torch.tensor(data, dtype=torch.float32).to(self.policy.device)
         dataset = TensorDataset(data)
-        dataloader = DataLoader(dataset, batch_size=1024)
+        dataloader = DataLoader(dataset, batch_size=4096)
 
         preds = []
         with torch.no_grad():

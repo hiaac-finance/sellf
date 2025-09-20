@@ -1,0 +1,9 @@
+name: simple_agent
+algorithm_param_list : [
+  {"decision_type" : "random"},
+  {"decision_type": "all_approve"},
+  {"decision_type": "all_deny"},
+  {"decision_type" : "accept_g0"},
+  {"decision_type" : "accept_g1"},
+  {"decision_type" : "min_max"},
+]
