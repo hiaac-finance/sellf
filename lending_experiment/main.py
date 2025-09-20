@@ -24,7 +24,6 @@ from lending_experiment.agents.ppo import PPO
 from lending_experiment.agents.pocar import POCAR
 from lending_experiment.agents.rrm import RRM
 from lending_experiment.agents.sellf import SELLF
-from lending_experiment.agents.serew import SEREW
 from lending_experiment.agents.simple_agent import SimpleAgent
 
 from lending_experiment.environments.resampling import (
@@ -43,10 +42,6 @@ def get_env(env_name: str, utility_method: str, algorithm: str) -> ResamplingEnv
         delta_method = "full"
     elif algorithm == "sellf":
         delta_method = "imputation"
-    elif algorithm == "serew":
-        delta_method = "imputation"
-    elif algorithm == "sellf_hard":
-        delta_method = "imputation_hard"
     else:
         delta_method = "accepted"
     if "fico" in env_name or "setting" in env_name:
@@ -59,8 +54,6 @@ def get_env(env_name: str, utility_method: str, algorithm: str) -> ResamplingEnv
         )
     elif env_name == "enem":
         env = EnemEnv(utility_method=utility_method, delta_method=delta_method, seed=0)
-    if algorithm == "pocar_full":
-        env.next_disp = True
     return env
 
 
@@ -108,16 +101,6 @@ def get_alg(env, config, device):
             env=env,
             policy_kwargs={
                 "use_predictor": config["use_predictor"],
-            },
-            omega=config["omega"],
-            device=device,
-            **config["algorithm_params"],
-        )
-    elif config["algorithm"] == "serew":
-        model = SEREW(
-            env=env,
-            policy_kwargs={
-                "use_predictor": True,
             },
             omega=config["omega"],
             device=device,
@@ -270,11 +253,10 @@ def main(config):
     device = torch.device("cpu")
 
     start = time.time()
-    with open("log.txt", "a") as f:
-        f.write("\n-------------------------------------------------------------\n")
-        f.write(f"Start time: {time.strftime('%H:%M:%S', time.localtime(start))}\n")
-        f.write(f"Config: {config}\n")
-        f.write("\n-------------------------------------------------------------\n")
+    print("-------------------------------------------------------------")
+    print(f"Start time: {time.strftime('%H:%M:%S', time.localtime(start))}")
+    print(f"Config: {config}")
+    print("-------------------------------------------------------------")
 
     exp_dir = (
         f"./experiments/{config['env_name']}/{config['mu_type']}/{config['exp_name']}"
@@ -328,12 +310,11 @@ def main(config):
     )
 
     end = time.time()
-    with open("log.txt", "a") as f:
-        f.write("\n-------------------------------------------------------------\n")
-        f.write(f"End time: {time.strftime('%H:%M:%S', time.localtime(end))}\n")
-        f.write(f"Took: {(end - start) / 60} minutes\n")
-        f.write(f"Config: {config}\n\n")
-        f.write("\n-------------------------------------------------------------\n")
+    print("-------------------------------------------------------------")
+    print(f"End time: {time.strftime('%H:%M:%S', time.localtime(end))}")
+    print(f"Took: {(end - start) / 60} minutes")
+    print(f"Config: {config}")
+    print("-------------------------------------------------------------")
 
 
 if __name__ == "__main__":
@@ -367,9 +348,9 @@ if __name__ == "__main__":
         }
         config_list.append(config_i)
 
-
-    config = config_list[args.config_id]
-    main(config)
+    if args.config_id < len(config_list):
+        config = config_list[args.config_id]
+        main(config)
 
 
 

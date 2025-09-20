@@ -1,4 +1,0 @@
-name: sellf_hard
-algorithm_param_list : [
-  {"beta_1": 0., "beta_2": 0.,},
-]

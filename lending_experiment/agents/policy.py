@@ -112,6 +112,8 @@ class Agent(nn.Module):
 
     def save_history(self) -> None:
         """Add current actor to history and keep only the last 10."""
+        if len(self.actor_history) >= 20:
+            return
         self.actor_history.append(
             nn.Sequential(
                 layer_init(nn.Linear(self.features_dim, 64)),
@@ -122,8 +124,6 @@ class Agent(nn.Module):
             ).to(self.device)
         )
         self.actor_history[-1].load_state_dict(self.actor.state_dict())
-        if len(self.actor_history) > 20:
-            self.actor_history.pop(0)
 
     def get_action_all_prob(self, x: torch.Tensor) -> torch.Tensor:
         rej = torch.ones_like(x[:, 0])

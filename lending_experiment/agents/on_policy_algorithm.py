@@ -194,6 +194,7 @@ class OnPolicyAlgorithm:
         total_timesteps: int,
     ) -> "OnPolicyAlgorithm":
         self.num_timesteps = 0
+        #pbar = tqdm(total=total_timesteps)
         while self.num_timesteps < total_timesteps:
 
             self.collect_rollouts(
@@ -201,6 +202,7 @@ class OnPolicyAlgorithm:
             )
             self.logger.dump(step=self.num_timesteps)
             self.train()
+            #pbar.update(self.n_steps)
 
 
         return self

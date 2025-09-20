@@ -26,7 +26,7 @@ class ResamplingEnv(gym.Env):
         seed=None,
     ):
         assert utility_method in ["accuracy", "qualification", "tpr"]
-        assert delta_method in ["full", "imputation", "imputation_hard", "accepted"]
+        assert delta_method in ["full", "imputation", "accepted"]
         self.n_groups = n_groups
         self.cost = cost
         self.n_applicants = n_applicants
@@ -34,7 +34,6 @@ class ResamplingEnv(gym.Env):
         self.utility_method = utility_method
         self.delta_method = delta_method
         self.action_space = spaces.Discrete(2)
-        self.next_disp = False
 
         resource_space = spaces.Box(
             low=0.0,
@@ -74,8 +73,6 @@ class ResamplingEnv(gym.Env):
         )
         self.init_data["group"] = self.init_data["group"].astype(np.int32)
         self.data = deepcopy(self.init_data)
-        self.pool_accepted = [[] for _ in range(self.n_groups)]
-        self.pool_rejected = [[] for _ in range(self.n_groups)]
         self.timestep = 0
 
         self.get_label_pred = lambda x, g: 0
@@ -86,10 +83,7 @@ class ResamplingEnv(gym.Env):
         self.get_pred_batch = lambda x, g: 0
         self.delta = 0
         self.delta_obs = 0
-        self.error_bound = [0, 0]
-        self.error_accepted = [0, 0]
         self.error_rejected = [0, 0]
-        self.divergence = [0, 0]
         self.seed(seed)
         self._load_data()
         self._state_init()
@@ -120,7 +114,6 @@ class ResamplingEnv(gym.Env):
         return self._get_observable_state()
 
     def update_models(self):
-        self.pool_rejected = [[] for _ in range(self.n_groups)]
         for idx in range(self.n_applicants):
             group = self.init_data["group"][idx]
             features = self.init_data["features"][idx]
@@ -129,113 +122,7 @@ class ResamplingEnv(gym.Env):
             action = self.get_action(features, group)
             self.init_data["pred"][idx] = pred
             self.init_data["action"][idx] = action
-            if action == 0:
-                self.pool_rejected[group].append(
-                    {
-                        "features": features,
-                        "label": label,
-                        "one_minus_pi": None,
-                    }
-                )
             self.update_utility(idx, label, pred, action, init=True)
-
-        if "imputation" in self.delta_method:
-            # update accepted pool
-            # Calculate "one_minus_pi" of new accepted individuals
-            for i in range(self.n_groups):
-                group = np.zeros(self.n_groups)
-                group[i] = 1
-                for j in range(len(self.pool_accepted[i])):
-                    if self.pool_accepted[i][j]["one_minus_pi"] is None:
-                        features = self.pool_accepted[i][j]["features"]
-                        prob_list = self.get_action_prob_list(features, group)
-                        self.pool_accepted[i][j]["one_minus_pi"] = np.prod(
-                            [1 - x for x in prob_list]
-                        )
-
-            # Here I need to calculate the error_bound, that is the error of the predictor plus
-            # the Chi Squared divergence term
-
-            self.error_accepted = np.zeros(self.n_groups)
-            self.error_rejected = np.zeros(self.n_groups)
-            self.divergence = np.zeros(self.n_groups)
-
-            if len(self.pool_accepted[0]) == 0 or len(self.pool_accepted[1]) == 0:
-                return
-
-            for i in range(self.n_groups):
-                # Calculate first the error on the rejected population
-                if len(self.pool_rejected[i]) == 0:
-                    self.error_rejected[i] = 0
-                    continue
-                group = np.zeros(
-                    (len(self.pool_rejected[i]), self.n_groups), dtype=np.float32
-                )
-                group[:, i] = 1
-                features = np.array(
-                    [applicant["features"] for applicant in self.pool_rejected[i]]
-                )
-                labels = np.array(
-                    [applicant["label"] for applicant in self.pool_rejected[i]]
-                )
-                preds = self.get_pred_batch(features, group)
-                self.error_rejected[i] = np.mean(preds - labels)
-
-                # Create a large dataset of accepted applicants
-                group = np.zeros(
-                    (len(self.pool_accepted[i]), self.n_groups), dtype=np.float32
-                )
-                group[:, i] = 1
-                features = np.array(
-                    [applicant["features"] for applicant in self.pool_accepted[i]]
-                )
-
-                # Calculate the error of the updated classifier on the accepted population
-                labels = np.array(
-                    [applicant["label"] for applicant in self.pool_accepted[i]]
-                )
-
-                # Calculate the weights
-                one_minus_pi = 1 - self.get_action_prob_batch(features, group)
-                one_minus_pi_hist = np.array(
-                    [applicant["one_minus_pi"] for applicant in self.pool_accepted[i]]
-                )
-                one_minus_pi_hist *= one_minus_pi
-                # Save new one_minus_pi_hist
-                for j in range(len(self.pool_accepted[i])):
-                    self.pool_accepted[i][j]["one_minus_pi"] = one_minus_pi_hist[j]
-
-                one_minus_pi_hist = 1 - one_minus_pi_hist
-
-                weights = one_minus_pi / one_minus_pi_hist
-
-                # print(f"Weights stats: {weights.mean():.2f} , {weights.max():.2f}")
-
-                preds = self.get_pred_batch(features, group)
-                self.error_accepted[i] = (weights * (preds - labels)).mean()
-
-                renyi_div = np.mean((one_minus_pi / one_minus_pi_hist) ** 2)
-
-                # calculate complexity term
-                delta = 0.95
-                m = len(one_minus_pi)
-                p = self.n_features
-                C = np.sqrt((p * np.log(2 * m * np.e / p) + np.log(4 / delta)) / m)
-                C *= np.power(renyi_div, 3 / 8)
-                C *= 2 ** (5 / 4)
-
-                # M = 2
-                # term1 = p * np.log(2 * m * np.e / p) + np.log(2 / delta)
-                # term1 *= 4 * M / (3 * m)
-                # term2 = 2 * renyi_div * (p * np.log(2 * m * np.e / p) + np.log(2 / delta))
-                # term2 = np.sqrt(term2 / m)
-                # C = term1 + term2
-
-                # print(f"Renyi div: {renyi_div:.2f}, C: {C:.4f}")
-                self.divergence[i] = C
-
-            self.error_bound = self.error_accepted + self.divergence
-            self.error_bound = np.clip(self.error_bound, 0, 1)
 
     def compute_disparity(self):
         # calculate disparity using self.data
@@ -324,17 +211,22 @@ class ResamplingEnv(gym.Env):
                 out=np.zeros_like(pred_sum),
             )
 
-            # here, the error bound will already be calculated
-            delta_pred = np.zeros(self.n_groups)
-            if self.utility_method in ["qualification", "accuracy"]:
-                delta_pred = self.error_bound * (1 - accept_rate)
-            else:
-                delta_pred = self.error_bound * (1 - accept_rate) / pred_rate
-
-            if self.delta_method == "imputation_hard":
-                self.delta_pred = abs(delta_pred[1]) + abs(delta_pred[0])
-            else:
-                self.delta_pred = abs(delta_pred[1] - delta_pred[0])
+            # calculate error rates
+            error = self.data["pred"] - self.data["label"]
+            error_rejected = error * (1 - self.data["action"])
+            error_rejected = np.array(
+                [
+                    np.sum(error_rejected[self.data["group"] == i])
+                    for i in range(self.n_groups)
+                ]
+            )
+            self.error_rejected = np.true_divide(
+                error_rejected,
+                accept_sum,
+                where=accept_sum != 0,
+                out=np.zeros_like(error_rejected),
+            )
+                
 
             delta_pred_real = np.zeros(self.n_groups)
             if self.utility_method in ["qualification", "accuracy"]:
@@ -360,26 +252,13 @@ class ResamplingEnv(gym.Env):
     def step(self, action):
         self.timestep += 1
         old_resource = self.resource
-        group = self.data["group"][self.idx]
-        features = self.data["features"][self.idx]
         label = self.data["label"][self.idx]
         pred = self.data["pred"][self.idx]
-
-        if action == 1 and len(self.pool_accepted[group]) < 50_000:
-            self.pool_accepted[group].append(
-                {
-                    "features": features,
-                    "label": label,
-                    "one_minus_pi": None,
-                }
-            )
-
         self.update_resource(action, label)
         # Update utility based on this action for this applicant
         self.update_utility(self.idx, label, pred, action)
         # Update resource with action
         self.compute_disparity()
-        # Update features of applicant based on action
         self.update_applicant(self.idx, action)
         self.sample_applicant()
         observation = self._get_observable_state()
@@ -438,14 +317,6 @@ class ResamplingEnv(gym.Env):
         label = self.get_label(features, group)
         pred = self.get_label_pred(features, group)
         action = self.get_action(features, group)
-        if action == 0:
-            self.pool_rejected[group].append(
-                {
-                    "features": features,
-                    "label": label,
-                    "one_minus_pi": None,
-                }
-            )
         self.data["label"][idx] = label
         self.data["pred"][idx] = pred
         self.data["action"][idx] = action

@@ -23,7 +23,6 @@ class SELLF(OnPolicyAlgorithm):
         beta_0: float = 1,
         beta_1: float = 0.5,
         beta_2: float = 0.5,
-        beta_3: float = 0.,
         omega: float = 0.1,
         n_steps: int = 2048,
         batch_size: int = 64,
@@ -67,7 +66,6 @@ class SELLF(OnPolicyAlgorithm):
         self.beta_0 = beta_0
         self.beta_1 = beta_1
         self.beta_2 = beta_2
-        self.beta_3 = beta_3
         self.omega = omega
         self.batch_size = batch_size
         self.n_epochs = n_epochs
@@ -95,30 +93,21 @@ class SELLF(OnPolicyAlgorithm):
         self.policy.save_history()
 
         losses_hist=[]
-        reg_hist = []
         steps = 0
         for epoch in range(100):
             for i, rollout_data in enumerate(self.memory.get(self.batch_size)):
                 preds = self.policy.get_label_prob(rollout_data.observations)
                 with th.no_grad():
-                    #prob_loan = self.policy.get_action_prob(rollout_data.observations)
-                    #prob_loan = th.clamp(prob_loan, min=0.05, max=1)
-                    #weights = (1 - prob_loan) / prob_loan
                     prob_rej = 1 - self.policy.get_action_prob(rollout_data.observations)
                     prob_accept_all = self.policy.get_action_all_prob(rollout_data.observations)
                     weights = prob_rej / (prob_accept_all)
-
 
                 group_0_idx = (rollout_data.groups[:, 0] == 1).nonzero()
                 group_1_idx = (rollout_data.groups[:, 1] == 1).nonzero()
 
                 pred_loss = pred_criterion(preds, rollout_data.labels)
                 pred_loss = pred_loss * weights
-
                 pred_loss = pred_loss[group_0_idx].sum() / weights[group_0_idx].sum() + pred_loss[group_1_idx].sum() / weights[group_1_idx].sum()
-                #pred_loss = pred_loss.sum() / weights.sum()
-
-                #print(weights[group_0_idx].sum(), weights[group_1_idx].sum())
 
                 losses_hist.append(pred_loss.item())
 
@@ -132,15 +121,12 @@ class SELLF(OnPolicyAlgorithm):
                     break
             
             self.policy.pred_scheduler.step()
-            self.logger.record("train/pred_lr", self.policy.pred_scheduler.get_last_lr()[0])
+            self.logger.record("pred_lr", self.policy.pred_scheduler.get_last_lr()[0])
             if steps >= self.predictor_steps:
                 break
 
-
         mean_loss = np.mean(losses_hist)
-        reg_loss = np.mean(reg_hist) if len(reg_hist) > 0 else 0
-        self.logger.record("train/pred_loss", mean_loss)
-        self.logger.record("train/pred_reg", reg_loss)
+        self.logger.record("pred_loss", mean_loss)
 
 
     def train(self) -> None:
@@ -153,6 +139,8 @@ class SELLF(OnPolicyAlgorithm):
         entropy_losses = []
         pg_losses, value_losses = [], []
         clip_fractions = []
+        renyi_divs_g0 = []
+        renyi_divs_g1 = []
         continue_training = True
 
         self.train_predictor()
@@ -160,7 +148,25 @@ class SELLF(OnPolicyAlgorithm):
             self.first_iter = False
             # only train the predictor
             return
+        
+        # calculate r_i and a[i]_i for each group
+        g0_idx = (self.rollout_buffer.groups[:, :, 0] == 1).nonzero()
+        g1_idx = (self.rollout_buffer.groups[:, :, 1] == 1).nonzero()
 
+        r0 = 1 - self.rollout_buffer.actions[g0_idx].mean()
+        r1 = 1 - self.rollout_buffer.actions[g1_idx].mean()
+        aK_0 = self.rollout_buffer.prob_action_all[g0_idx].mean()
+        aK_1 = self.rollout_buffer.prob_action_all[g1_idx].mean()
+
+        if self.utility_method == "tpr":
+            tphi_0 = (self.rollout_buffer.imputations[g0_idx]).mean()
+            tphi_1 = (self.rollout_buffer.imputations[g1_idx]).mean()
+            c0 = aK_0 / (r0 * tphi_0 + 1e-8)
+            c1 = aK_1 / (r1 * tphi_1 + 1e-8)
+        else:
+            c0 = aK_0 / (r0 + 1e-8)
+            c1 = aK_1 / (r1 + 1e-8)
+        
         # train for n_epochs epochs
         for epoch in range(self.n_epochs):
             approx_kl_divs = []
@@ -184,38 +190,17 @@ class SELLF(OnPolicyAlgorithm):
                     -rollout_data.delta_obs + th.tensor(self.omega / 2, dtype=th.float32),
                 )
 
-                # Compute the error constraint
-                error_term = th.min(
-                    th.zeros(rollout_data.delta_preds.shape[0]).to(self.device),
-                    -rollout_data.delta_preds + th.tensor(self.omega / 2, dtype=th.float32),
-                )
-
-                # Compute the variance constraint
-                #var_term = th.max(
-                #    th.zeros(rollout_data.delta_vars.shape[0]).to(self.device),
-                #    -rollout_data.delta_vars,
-                #)
-
-                # Bring the 3 terms to scale for numerical stability
                 advantages = (advantages - th.min(advantages)) / (
                     th.max(advantages) - th.min(advantages) + 1e-8
                 )
                 vt_term = (vt_term - th.min(vt_term)) / (
                     th.max(vt_term) - th.min(vt_term) + 1e-8
                 )
-                error_term = (error_term - th.min(error_term)) / (
-                    th.max(error_term) - th.min(error_term) + 1e-8
-                )
-                #var_term = (var_term - th.min(var_term)) / (
-                #    th.max(var_term) - th.min(var_term) + 1e-8
-                #)
 
                 # Add terms to advantages
                 advantages = (
                     self.beta_0 * advantages
                     + self.beta_1 * vt_term
-                    + self.beta_2 * error_term
-                #    + self.beta_3 * var_term
                 )
 
                 # Normalize advantage
@@ -258,19 +243,22 @@ class SELLF(OnPolicyAlgorithm):
                 entropy_losses.append(entropy_loss.item())
 
                 # also minimize the Renyi divergence between the current policy and all previous policies
-                if self.beta_3 > 0:
-                    prob_action = self.policy.get_action_prob(rollout_data.observations)
-                    prob_action_all = self.policy.get_action_all_prob(rollout_data.observations)
-                    ratio_all = (1 - prob_action) / (prob_action_all + 1e-8)
-                    renyi_div = th.mean(ratio_all[actions == 1] ** 2)
-                else:
-                    renyi_div = 0
+                prob_action = self.policy.get_action_prob(rollout_data.observations)
+                group_0_idx = (rollout_data.groups[:, 0] == 1).nonzero()
+                group_1_idx = (rollout_data.groups[:, 1] == 1).nonzero()
+                prob_all_action = rollout_data.prob_action_all
+                renyi_div_g0 = c0 * (1 - prob_action[group_0_idx]) ** 2 / (prob_all_action[group_0_idx] + 1e-8)
+                renyi_div_g1 = c1 * (1 - prob_action[group_1_idx]) ** 2 / (prob_all_action[group_1_idx] + 1e-8)
+                renyi_div = (renyi_div_g0.mean() + renyi_div_g1.mean()) / (c1 + c0)
+
+                renyi_divs_g0.append(renyi_div_g0.mean().item())
+                renyi_divs_g1.append(renyi_div_g1.mean().item())
 
                 loss = (
                     policy_loss
                     + self.ent_coef * entropy_loss
                     + self.vf_coef * value_loss
-                    + self.beta_3 * renyi_div
+                    + self.beta_2 * renyi_div
                 )
 
                 # Calculate approximate form of reverse KL Divergence for early stopping
@@ -310,65 +298,43 @@ class SELLF(OnPolicyAlgorithm):
         )
 
         # Logs
-        self.logger.record("train/entropy_loss", np.mean(entropy_losses))
-        self.logger.record("train/policy_gradient_loss", np.mean(pg_losses))
-        self.logger.record("train/value_loss", np.mean(value_losses))
-        self.logger.record("train/approx_kl", np.mean(approx_kl_divs))
-        self.logger.record("train/clip_fraction", np.mean(clip_fractions))
-        self.logger.record("train/loss", loss.item())
-        self.logger.record("train/explained_variance", explained_var)
+        self.logger.record("entropy_loss", np.mean(entropy_losses))
+        self.logger.record("policy_gradient_loss", np.mean(pg_losses))
+        self.logger.record("value_loss", np.mean(value_losses))
+        self.logger.record("approx_kl", np.mean(approx_kl_divs))
+        self.logger.record("clip_fraction", np.mean(clip_fractions))
+        self.logger.record("loss", loss.item())
+        self.logger.record("renyi_div_g0", np.mean(renyi_divs_g0))
+        self.logger.record("renyi_div_g1", np.mean(renyi_divs_g1))
+        self.logger.record("explained_variance", explained_var)
         self.logger.record(
-            "train/accept_rate", np.mean(self.rollout_buffer.actions.flatten())
+            "accept_rate", np.mean(self.rollout_buffer.actions.flatten())
         )
         self.logger.record(
-            "train/pos_rate", np.mean(self.rollout_buffer.labels.flatten())
+            "pos_rate", np.mean(self.rollout_buffer.labels.flatten())
         )
-        self.logger.record("train/reward", self.rollout_buffer.rewards.mean().item())
+        self.logger.record("reward", self.rollout_buffer.rewards.mean().item())
 
         # Logs some group-dependent variables
-        g0_idx = (self.rollout_buffer.groups[:, 0] == 1).nonzero()
-        g1_idx = (self.rollout_buffer.groups[:, 1] == 1).nonzero()
-
-        accept_rate = [
-            self.rollout_buffer.actions[g0_idx, 0].mean().item(),
-            self.rollout_buffer.actions[g1_idx, 0].mean().item(),
-        ]
-
         accuracy = (
             (self.rollout_buffer.labels[:, 0] == self.rollout_buffer.preds[:, 0])
             .mean()
             .item()
         )
 
-        self.logger.record("train/accept_g0", accept_rate[0])
-        self.logger.record("train/accept_g1", accept_rate[1])
-        self.logger.record("train/delta", self.rollout_buffer.deltas.mean().item())
-        self.logger.record("train/delta_obs", self.rollout_buffer.delta_obs.mean().item())
-        self.logger.record("train/delta_pred", self.rollout_buffer.delta_preds.mean().item())
-        self.logger.record("train/accuracy", accuracy)
+        self.logger.record("accept_g0", 1 - r0)
+        self.logger.record("accept_g1", 1 - r1)
+        self.logger.record("delta", self.rollout_buffer.deltas.mean().item())
+        self.logger.record("delta_obs", self.rollout_buffer.delta_obs.mean().item())
+        self.logger.record("delta_pred", self.rollout_buffer.delta_preds.mean().item())
+        self.logger.record("accuracy", accuracy)
 
-        if hasattr(self.policy, "log_std"):
-            self.logger.record("train/std", th.exp(self.policy.log_std).mean().item())
-
-        
-        error_rate = self.env.error_accepted
-        self.logger.record("train/error_g0", error_rate[0])
-        self.logger.record("train/error_g1", error_rate[1])
-
-        error_bound = self.env.error_bound
-        self.logger.record("train/error_bound_g0", error_bound[0])
-        self.logger.record("train/error_bound_g1", error_bound[1])
-        
         error_rejected = self.env.error_rejected
-        self.logger.record("train/error_rejected_g0", error_rejected[0])
-        self.logger.record("train/error_rejected_g1", error_rejected[1])
-
-        divergence = self.env.divergence
-        self.logger.record("train/divergence_g0", divergence[0])
-        self.logger.record("train/divergence_g1", divergence[1])
+        self.logger.record("error_rejected_g0", error_rejected[0])
+        self.logger.record("error_rejected_g1", error_rejected[1])
 
         delta_pred_real = self.env.delta_pred_real
-        self.logger.record("train/delta_pred_real", delta_pred_real)
+        self.logger.record("delta_pred_real", delta_pred_real)
         
         
 
