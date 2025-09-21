@@ -131,7 +131,7 @@ class ResamplingEnv(gym.Env):
         self.delta = self.utility_values[1] - self.utility_values[0]
         old_delta = self.delta_obs
         if self.delta_method == "full":
-            self.delta_obs = self.delta
+            self.utility_values_obs = self.utility_values
         elif self.delta_method == "accepted":
             for i in range(self.n_groups):
                 accepted_group = (self.data["group"] == i) & (self.data["action"] == 1)
@@ -169,7 +169,7 @@ class ResamplingEnv(gym.Env):
             if self.utility_method in ["qualification", "accuracy"]:
                 self.delta_pred_real = self.error_rejected * (1 - accept_rate)
             else:
-                self.delta_pred = self.error_rejected * (1 - accept_rate) / pred_rate
+                self.delta_pred_real = self.error_rejected * (1 - accept_rate) / pred_rate
             self.delta_pred_real = self.delta_pred_real[1] - self.delta_pred_real[0]
 
     def compute_utility(self, action, label):
