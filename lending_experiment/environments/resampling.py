@@ -61,10 +61,6 @@ class ResamplingEnv(gym.Env):
                     "label",
                     "action",
                     "pred",
-                    "utility",
-                    "active",
-                    "utility_obs",
-                    "active_obs",
                 ]
             ]
         )
@@ -84,6 +80,8 @@ class ResamplingEnv(gym.Env):
         self.delta = 0
         self.delta_obs = 0
         self.error_rejected = [0, 0]
+        self.utility_values = [0, 0]
+        self.utility_values_obs = [0, 0]
         self.seed(seed)
         self._load_data()
         self._state_init()
@@ -122,120 +120,65 @@ class ResamplingEnv(gym.Env):
             action = self.get_action(features, group)
             self.init_data["pred"][idx] = pred
             self.init_data["action"][idx] = action
-            self.update_utility(idx, label, pred, action, init=True)
 
     def compute_disparity(self):
-        # calculate disparity using self.data
-        self.data["utility"] *= self.data[
-            "active"
-        ]  # make utility of "inactive" be equal to 0
+        # calculate real disparity
+        for i in range(self.n_groups):
+            labels = self.data["label"][self.data["group"] == i]
+            actions = self.data["action"][self.data["group"] == i]
+            self.utility_values[i] = self.compute_utility(actions, labels)
 
-        self.group_counts = np.array(
-            [
-                np.sum(self.data["active"][self.data["group"] == i])
-                for i in range(self.n_groups)
-            ]
-        )
-        self.utility_sum = np.array(
-            [
-                np.sum(self.data["utility"][self.data["group"] == i])
-                for i in range(self.n_groups)
-            ]
-        )
-
-        self.utility_values = np.true_divide(
-            self.utility_sum,
-            self.group_counts,
-            where=self.group_counts != 0,
-            out=np.zeros_like(self.utility_sum),
-        )
-        old_delta = self.delta_obs
         self.delta = self.utility_values[1] - self.utility_values[0]
-        self.delta_obs = self.delta
-        self.delta_pred = 0
+        old_delta = self.delta_obs
+        if self.delta_method == "full":
+            self.delta_obs = self.delta
+        elif self.delta_method == "accepted":
+            for i in range(self.n_groups):
+                accepted_group = (self.data["group"] == i) & (self.data["action"] == 1)
+                if accepted_group.sum() > 0:
+                    self.utility_values_obs[i] = self.compute_utility(
+                        self.data["action"][accepted_group],
+                        self.data["label"][accepted_group],
+                    )
+                else:
+                    self.utility_values_obs[i] = 0
+        elif self.delta_method == "imputation":
+            accept_rate = np.zeros(self.n_groups)
+            pred_rate = np.zeros(self.n_groups)
+            for i in range(self.n_groups):
+                labels = self.data["label"][self.data["group"] == i]
+                actions = self.data["action"][self.data["group"] == i]
+                preds = self.data["pred"][self.data["group"] == i]
+                imputation = actions * labels + (1 - actions) * preds
+                self.utility_values_obs[i] = self.compute_utility(actions, imputation)
 
-        if "accepted" in self.delta_method or "imputation" in self.delta_method:
-            self.data["utility_obs"] *= self.data["active_obs"]
-            self.group_counts_obs = np.array(
-                [
-                    np.sum(self.data["active_obs"][self.data["group"] == i])
-                    for i in range(self.n_groups)
-                ]
-            )
-            self.utility_sum_obs = np.array(
-                [
-                    np.sum(self.data["utility_obs"][self.data["group"] == i])
-                    for i in range(self.n_groups)
-                ]
-            )
-            self.utility_values_obs = np.true_divide(
-                self.utility_sum_obs,
-                self.group_counts_obs,
-                where=self.group_counts_obs != 0,
-                out=np.zeros_like(self.utility_sum_obs),
-            )
-            self.delta_obs = self.utility_values_obs[1] - self.utility_values_obs[0]
+                #### calculate delta_pred
+                accept_rate[i] = actions.mean()
+                pred_rate[i] = imputation.mean()
+                self.error_rejected[i] = (
+                    (preds - labels)[actions == 0].mean()
+                    if (actions == 0).sum() > 0
+                    else 0
+                )
 
-        if "imputation" in self.delta_method:
-            # calculate other necessary delta values
-            group_counts = np.array(
-                [np.sum(self.data["group"] == i) for i in range(self.n_groups)]
-            )
-            accept_sum = np.array(
-                [
-                    np.sum(self.data["action"][self.data["group"] == i])
-                    for i in range(self.n_groups)
-                ]
-            )
-            accept_rate = np.true_divide(
-                accept_sum,
-                group_counts,
-                where=group_counts != 0,
-                out=np.zeros_like(accept_sum),
-            )
-
-            imputation = (
-                self.data["action"] * self.data["label"]
-                + (1 - self.data["action"]) * self.data["pred"]
-            )
-            pred_sum = np.array(
-                [
-                    np.sum(imputation[self.data["group"] == i])
-                    for i in range(self.n_groups)
-                ]
-            )
-            pred_rate = np.true_divide(
-                pred_sum,
-                group_counts,
-                where=group_counts != 0,
-                out=np.zeros_like(pred_sum),
-            )
-
-            # calculate error rates
-            error = self.data["pred"] - self.data["label"]
-            error_rejected = error * (1 - self.data["action"])
-            error_rejected = np.array(
-                [
-                    np.sum(error_rejected[self.data["group"] == i])
-                    for i in range(self.n_groups)
-                ]
-            )
-            self.error_rejected = np.true_divide(
-                error_rejected,
-                accept_sum,
-                where=accept_sum != 0,
-                out=np.zeros_like(error_rejected),
-            )
-                
-
-            delta_pred_real = np.zeros(self.n_groups)
-            if self.utility_method in ["qualification", "accuracy"]:
-                delta_pred_real = (self.error_rejected) * (1 - accept_rate)
-            else:
-                delta_pred_real = (self.error_rejected) * (1 - accept_rate) / pred_rate
-            self.delta_pred_real = delta_pred_real[1] - delta_pred_real[0]
-
+        self.delta_obs = self.utility_values_obs[1] - self.utility_values_obs[0]
         self.delta_delta = abs(self.delta_obs) - abs(old_delta)
+
+        #### calculate delta_pred
+        if self.delta_method == "imputation":
+            if self.utility_method in ["qualification", "accuracy"]:
+                self.delta_pred_real = self.error_rejected * (1 - accept_rate)
+            else:
+                self.delta_pred = self.error_rejected * (1 - accept_rate) / pred_rate
+            self.delta_pred_real = self.delta_pred_real[1] - self.delta_pred_real[0]
+
+    def compute_utility(self, action, label):
+        if self.utility_method == "accuracy":
+            return (action == label).mean()
+        elif self.utility_method == "qualification":
+            return label.mean()
+        elif self.utility_method == "tpr":
+            return action[label == 1].mean() if (label == 1).sum() > 0 else 0
 
     def _get_observable_state(self):
         group = np.zeros(self.n_groups, dtype=np.float32)
@@ -255,9 +198,6 @@ class ResamplingEnv(gym.Env):
         label = self.data["label"][self.idx]
         pred = self.data["pred"][self.idx]
         self.update_resource(action, label)
-        # Update utility based on this action for this applicant
-        self.update_utility(self.idx, label, pred, action)
-        # Update resource with action
         self.compute_disparity()
         self.update_applicant(self.idx, action)
         self.sample_applicant()
@@ -270,41 +210,6 @@ class ResamplingEnv(gym.Env):
             return
         self.resource += label - self.cost
         self.resource = max(0, self.resource)
-
-    def update_utility(self, idx, label, pred, action, init=False):
-        """Update the difference in utility for the current applicant. Also updates the utility in the pool."""
-        # First, calculate real utility
-        active = 1
-        if self.utility_method == "accuracy":
-            utility_value = 1 if label == action else 0
-        elif self.utility_method == "qualification":
-            utility_value = label
-        elif self.utility_method == "tpr":
-            utility_value = action
-            active = 1 if label == 1 else 0
-
-        utility_obs = utility_value
-        active_obs = active
-        if self.delta_method == "accepted":
-            utility_obs = utility_value
-            active_obs = active if action == 1 else 0
-
-        if "imputation" in self.delta_method:
-            active_obs = 1
-            label_obs = label if action == 1 else pred
-            if self.utility_method == "accuracy":
-                utility_obs = 1 if label_obs == action else 0
-            elif self.utility_method == "qualification":
-                utility_obs = label_obs
-            elif self.utility_method == "tpr":
-                utility_obs = action
-                active_obs = 1 if label_obs == 1 else 0
-
-        data_to_change = self.init_data if init else self.data
-        data_to_change["utility"][idx] = utility_value
-        data_to_change["active"][idx] = active
-        data_to_change["utility_obs"][idx] = utility_obs
-        data_to_change["active_obs"][idx] = active_obs
 
     def update_applicant(self, idx, action):
         # Implement logic to update the applicant based on the action taken
@@ -344,6 +249,7 @@ class LendingEnv(ResamplingEnv):
             "fico_equal",
             "fico_hard",
             "fico_fast",
+            "fico_no_decay",
             "fico_test",
             "setting1",
             "setting2",
@@ -378,7 +284,9 @@ class LendingEnv(ResamplingEnv):
             group_probs = data["group_likelihoods"]
             cluster_probs = data["cluster_probabilities"]
             success_probs = data["success_probabilities"]
-        elif self.distributions == "fico_equal":
+        elif (
+            self.distributions == "fico_equal" or self.distributions == "fico_no_decay"
+        ):
             group_probs = [0.5, 0.5]
             with open("data/fico.pkl", "rb") as f:
                 data = pkl.load(f)
@@ -555,6 +463,12 @@ class LendingEnv(ResamplingEnv):
             new_score = min(score + 1, num_features - 1)
         elif label == 0:
             new_score = max(score - 1, 0)
+
+        if self.distributions == "fico_no_decay":
+            new_score = max(score, new_score)
+            if np.random.rand() < 1:
+                new_score = min(score + 1, num_features - 1)
+
         features[score] = 0
         features[new_score] = 1
         return features

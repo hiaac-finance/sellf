@@ -280,7 +280,10 @@ def main(config):
         device=device,
     )
 
-    plot_learning(config["env_name"], config["mu_type"], config["exp_name"])
+    try:
+        plot_learning(config["env_name"], config["mu_type"], config["exp_name"])
+    except:
+        pass
 
     # Initialize eval directory to store eval information
     shutil.rmtree(eval_dir, ignore_errors=True)

@@ -1,0 +1,8 @@
+name: sellf
+algorithm_param_list : [
+  {"beta_1": 5, "beta_2": 0,},
+  {"beta_1": 5, "beta_2": 0.01,},
+  {"beta_1": 5, "beta_2": 0.05,},
+  {"beta_1": 5, "beta_2": 0.1,},
+  {"beta_1": 5, "beta_2": 0.2,},
+]

@@ -326,7 +326,6 @@ class SELLF(OnPolicyAlgorithm):
         self.logger.record("accept_g1", 1 - r1)
         self.logger.record("delta", self.rollout_buffer.deltas.mean().item())
         self.logger.record("delta_obs", self.rollout_buffer.delta_obs.mean().item())
-        self.logger.record("delta_pred", self.rollout_buffer.delta_preds.mean().item())
         self.logger.record("accuracy", accuracy)
 
         error_rejected = self.env.error_rejected

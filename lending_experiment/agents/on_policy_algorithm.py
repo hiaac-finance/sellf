@@ -148,7 +148,7 @@ class OnPolicyAlgorithm:
             delta = torch.tensor(np.array([env.delta])).float()
             delta_obs = torch.tensor(np.array([env.delta_obs])).float()
             delta_delta = torch.tensor(np.array([env.delta_delta])).float()
-            delta_pred = torch.tensor(np.array([env.delta_pred])).float()
+            delta_pred = torch.tensor(np.array([0])).float()
             rollout_buffer.add(
                 self._last_obs,
                 actions,
@@ -175,10 +175,10 @@ class OnPolicyAlgorithm:
 
         # if utlity method is qualification parity, shift delta_obs by one position back
         if self.utility_method == "qualification":
-            rollout_buffer.delta_obs = torch.roll(rollout_buffer.delta_obs, shifts=-1, dims=0)
-            rollout_buffer.delta_obs[-1] = 0
-            rollout_buffer.delta_deltas = torch.roll(rollout_buffer.delta_deltas, shifts=-1, dims=0)
-            rollout_buffer.delta_deltas[-1] = 0
+            rollout_buffer.delta_obs = np.roll(rollout_buffer.delta_obs, shift=-1, axis=0)
+            rollout_buffer.delta_obs[-1] = rollout_buffer.delta_obs[-2]
+            rollout_buffer.delta_deltas = np.roll(rollout_buffer.delta_deltas, shift=-1, axis=0)
+            rollout_buffer.delta_deltas[-1] = rollout_buffer.delta_deltas[-2]
 
         rollout_buffer.compute_returns_and_advantage(last_values=values, dones=dones)
 
