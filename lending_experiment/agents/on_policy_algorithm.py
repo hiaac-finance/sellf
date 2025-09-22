@@ -89,7 +89,7 @@ class OnPolicyAlgorithm:
         self.policy.eval()
 
         # first, predict for everyone in the pool
-        env.update_models()
+        env.start_history()
 
         if self._last_obs is None:
             self._last_obs = env.reset()
@@ -118,17 +118,16 @@ class OnPolicyAlgorithm:
                     actions, self.action_space.low, self.action_space.high
                 )
 
-            idx = env.idx
-            data = env.data
-            label = np.array([data["label"][idx]]).astype(np.float32)
-            group_idx = data["group"][idx]
+            new_obs, rewards, dones, infos = env.step(clipped_actions)
+
             group = np.zeros(2, dtype=np.float32)
-            group[group_idx] = 1
-
-
+            group[infos["group"]] = 1
+            label = np.array([infos["label"]]).astype(np.float32)
+            delta = np.array([infos["delta"]]).astype(np.float32)
+            delta_obs = np.array([infos["delta_obs"]]).astype(np.float32)
+            delta_delta = np.array([infos["delta_delta"]]).astype(np.float32)
             imputation = label if actions == 1 else label_pred
 
-            new_obs, rewards, dones, infos = env.step(clipped_actions)
 
             self.num_timesteps += 1
 
@@ -145,10 +144,7 @@ class OnPolicyAlgorithm:
                 rewards += self.gamma * terminal_value
                 new_obs = env.reset()
 
-            delta = torch.tensor(np.array([env.delta])).float()
-            delta_obs = torch.tensor(np.array([env.delta_obs])).float()
-            delta_delta = torch.tensor(np.array([env.delta_delta])).float()
-            delta_pred = torch.tensor(np.array([0])).float()
+            delta_pred = np.array([0]).astype(np.float32)
             rollout_buffer.add(
                 self._last_obs,
                 actions,
@@ -172,14 +168,6 @@ class OnPolicyAlgorithm:
         with th.no_grad():
             # Compute value for the last timestep
             values = self.policy.get_value(obs_as_tensor(new_obs, self.device))
-
-        # if utlity method is qualification parity, shift delta_obs by one position back
-        if self.utility_method == "qualification":
-            rollout_buffer.delta_obs = np.roll(rollout_buffer.delta_obs, shift=-1, axis=0)
-            rollout_buffer.delta_obs[-1] = rollout_buffer.delta_obs[-2]
-            rollout_buffer.delta_deltas = np.roll(rollout_buffer.delta_deltas, shift=-1, axis=0)
-            rollout_buffer.delta_deltas[-1] = rollout_buffer.delta_deltas[-2]
-
         rollout_buffer.compute_returns_and_advantage(last_values=values, dones=dones)
 
     def train(self) -> None:

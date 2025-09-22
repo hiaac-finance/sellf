@@ -202,35 +202,30 @@ def evaluate(env, agent, seeds, eval_dir, device):
         torch.manual_seed(seeds[ep])
         env.seed(seeds[ep])
 
-        env.update_models()
+        env.start_history()
         obs = env.reset()
         done = False
         t = 0
         while not done:
             obs = np.array(obs).reshape(1, -1)
             obs = torch.tensor(obs, dtype=torch.float32).to(device)
-            action = agent.get_action(obs)
-            action = action.item()
+            action = agent.get_action(obs).item()
             pred = agent.get_label(obs).item()
 
-            # Logging
-            group_id = env.data["group"][env.idx]
-            # Add to loans if the agent wants to loan
-            label = env.data["label"][env.idx]
-            obs, _, done, _ = env.step(action)
+            obs, _, done, infos = env.step(action)
             resource = env.resource
             eval_data.append(
                 {
                     "ep": ep,
                     "t": t,
-                    "group_id": group_id,
+                    "group_id": infos["group"],
                     "action": action,
-                    "label": label,
+                    "label": infos["label"],
                     "pred": pred,
-                    "correct": int(label == pred),
+                    "correct": int(infos["label"] == pred),
                     "resource": resource,
-                    "delta": env.delta,
-                    "delta_obs": env.delta_obs,
+                    "delta": infos["delta"],
+                    "delta_obs": infos["delta_obs"],
                 }
             )
             t += 1

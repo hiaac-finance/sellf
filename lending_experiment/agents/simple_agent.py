@@ -87,6 +87,6 @@ class SimpleAgent(OnPolicyAlgorithm):
             # accept if group is the one with lowest utility
             group = observation[0, -2:].argmax().item()
             utility = self.env.utility_values
-            action = 1 if utility[group] == utility.min() else 0
+            action = 1 if utility[group] == np.min(utility) else 0
         action = th.tensor([action], device=self.device)
         return action

@@ -352,10 +352,10 @@ class RolloutBuffer(BaseBuffer):
         self.episode_starts[self.pos] = np.array(episode_start).copy()
         self.values[self.pos] = value.clone().cpu().numpy().flatten()
         self.log_probs[self.pos] = log_prob.clone().cpu().numpy()
-        self.deltas[self.pos] = deltas.clone().cpu().numpy()
-        self.delta_obs[self.pos] = delta_obs.clone().cpu().numpy()
-        self.delta_deltas[self.pos] = delta_delta.clone().cpu().numpy()
-        self.delta_preds[self.pos] = delta_preds.clone().cpu().numpy()
+        self.deltas[self.pos] = deltas.copy()
+        self.delta_obs[self.pos] = delta_obs.copy()
+        self.delta_deltas[self.pos] = delta_delta.copy()
+        self.delta_preds[self.pos] = delta_preds.copy()
         self.prob_action_all[self.pos] = prob_action_all.clone().cpu().numpy()
         self.pos += 1
         if self.pos == self.buffer_size:

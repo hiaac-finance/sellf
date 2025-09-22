@@ -58,9 +58,6 @@ class ResamplingEnv(gym.Env):
                 for col in [
                     "group",
                     "features",
-                    "label",
-                    "action",
-                    "pred",
                 ]
             ]
         )
@@ -84,7 +81,6 @@ class ResamplingEnv(gym.Env):
         self.utility_values_obs = [0, 0]
         self.seed(seed)
         self._load_data()
-        self._state_init()
 
     def seed(self, seed=None):
         np.random.seed(seed)
@@ -94,10 +90,6 @@ class ResamplingEnv(gym.Env):
         """This function should fill the entries in self.init_data"""
         return
 
-    def _state_init(self):
-        self.resource = 1_000
-        self.sample_applicant()
-
     def sample_applicant(self):
         selected = np.random.choice(self.n_applicants, size=1)[0]
         self.idx = selected
@@ -106,27 +98,50 @@ class ResamplingEnv(gym.Env):
     def reset(self):
         """Resets the environment."""
         self.timestep = 0
+        self.resource = 1_000
         self.data = deepcopy(self.init_data)
-        self._state_init()
+        self.start_history()
+        self.sample_applicant()
         self.compute_disparity()
         return self._get_observable_state()
 
-    def update_models(self):
-        for idx in range(self.n_applicants):
+    def start_history(self):
+        history_size = 2_000
+        self.history = dict(
+            [
+                (col, np.zeros(history_size, dtype=np.float32))
+                for col in ["group", "label", "action", "pred"]
+            ]
+        )
+        self.history_pos = 0
+        # rum some iterations without updating features
+        for _ in range(history_size):
+            # randomly sample an applicant
+            idx = np.random.choice(self.n_applicants, size=1)[0]
             group = self.init_data["group"][idx]
             features = self.init_data["features"][idx]
-            label = self.init_data["label"][idx]
+            label = self.get_label(features, group)
             pred = self.get_label_pred(features, group)
             action = self.get_action(features, group)
-            self.init_data["pred"][idx] = pred
-            self.init_data["action"][idx] = action
+
+            self.history["group"][self.history_pos] = group
+            self.history["label"][self.history_pos] = label
+            self.history["action"][self.history_pos] = action
+            self.history["pred"][self.history_pos] = pred
+            self.history_pos += 1
+
+        self.history_pos = 0
 
     def compute_disparity(self):
         # calculate real disparity
+        groups = self.history["group"]
+        labels = self.history["label"]
+        actions = self.history["action"]
+        preds = self.history["pred"]
         for i in range(self.n_groups):
-            labels = self.data["label"][self.data["group"] == i]
-            actions = self.data["action"][self.data["group"] == i]
-            self.utility_values[i] = self.compute_utility(actions, labels)
+            labels_g = labels[groups == i]
+            actions_g = actions[groups == i]
+            self.utility_values[i] = self.compute_utility(actions_g, labels_g)
 
         self.delta = self.utility_values[1] - self.utility_values[0]
         old_delta = self.delta_obs
@@ -134,11 +149,11 @@ class ResamplingEnv(gym.Env):
             self.utility_values_obs = self.utility_values
         elif self.delta_method == "accepted":
             for i in range(self.n_groups):
-                accepted_group = (self.data["group"] == i) & (self.data["action"] == 1)
+                accepted_group = (groups == i) & (actions == 1)
                 if accepted_group.sum() > 0:
                     self.utility_values_obs[i] = self.compute_utility(
-                        self.data["action"][accepted_group],
-                        self.data["label"][accepted_group],
+                        actions[accepted_group],
+                        labels[accepted_group],
                     )
                 else:
                     self.utility_values_obs[i] = 0
@@ -146,18 +161,18 @@ class ResamplingEnv(gym.Env):
             accept_rate = np.zeros(self.n_groups)
             pred_rate = np.zeros(self.n_groups)
             for i in range(self.n_groups):
-                labels = self.data["label"][self.data["group"] == i]
-                actions = self.data["action"][self.data["group"] == i]
-                preds = self.data["pred"][self.data["group"] == i]
-                imputation = actions * labels + (1 - actions) * preds
-                self.utility_values_obs[i] = self.compute_utility(actions, imputation)
+                labels_g = labels[groups == i]
+                actions_g = actions[groups == i]
+                preds_g = preds[groups == i]
+                imputation = actions_g * labels_g + (1 - actions_g) * preds_g
+                self.utility_values_obs[i] = self.compute_utility(actions_g, imputation)
 
                 #### calculate delta_pred
-                accept_rate[i] = actions.mean()
+                accept_rate[i] = actions_g.mean()
                 pred_rate[i] = imputation.mean()
                 self.error_rejected[i] = (
-                    (preds - labels)[actions == 0].mean()
-                    if (actions == 0).sum() > 0
+                    (preds_g - labels_g)[actions_g == 0].mean()
+                    if (actions_g == 0).sum() > 0
                     else 0
                 )
 
@@ -169,7 +184,9 @@ class ResamplingEnv(gym.Env):
             if self.utility_method in ["qualification", "accuracy"]:
                 self.delta_pred_real = self.error_rejected * (1 - accept_rate)
             else:
-                self.delta_pred_real = self.error_rejected * (1 - accept_rate) / pred_rate
+                self.delta_pred_real = (
+                    self.error_rejected * (1 - accept_rate) / pred_rate
+                )
             self.delta_pred_real = self.delta_pred_real[1] - self.delta_pred_real[0]
 
     def compute_utility(self, action, label):
@@ -195,15 +212,51 @@ class ResamplingEnv(gym.Env):
     def step(self, action):
         self.timestep += 1
         old_resource = self.resource
-        label = self.data["label"][self.idx]
-        pred = self.data["pred"][self.idx]
+        group = self.data["group"][self.idx]
+        features = self.data["features"][self.idx]
+        self.history["group"][self.history_pos] = group
+
+        label = self.get_label(features, group)
+        pred = self.get_label_pred(features, group)
         self.update_resource(action, label)
+
+
+        # different strategies between methods
+        if self.utility_method == "qualification":
+            self.update_applicant(self.idx, action, label)
+            new_features = self.data["features"][self.idx]
+            new_label = self.get_label(new_features, group)
+            new_pred = self.get_label_pred(new_features, group)
+            new_action = self.get_action(new_features, group)
+            self.history["label"][self.history_pos] = new_label
+            self.history["pred"][self.history_pos] = new_pred
+            self.history["action"][self.history_pos] = new_action
+        else:
+            self.history["label"][self.history_pos] = label
+            self.history["pred"][self.history_pos] = pred
+            self.history["action"][self.history_pos] = action
+            self.update_applicant(self.idx, action, label)
+
+        self.history_pos += 1
+        if self.history_pos >= 2_000:
+            self.history_pos = 0
+
         self.compute_disparity()
-        self.update_applicant(self.idx, action)
         self.sample_applicant()
         observation = self._get_observable_state()
         reward = self.resource - old_resource
-        return observation, reward, self._is_done(), {}
+        return (
+            observation,
+            reward,
+            self._is_done(),
+            {
+                "group": group,
+                "label": label,
+                "delta": self.delta,
+                "delta_obs": self.delta_obs,
+                "delta_delta": self.delta_delta,
+            },
+        )
 
     def update_resource(self, action, label):
         if action == 0:  # reject
@@ -211,20 +264,13 @@ class ResamplingEnv(gym.Env):
         self.resource += label - self.cost
         self.resource = max(0, self.resource)
 
-    def update_applicant(self, idx, action):
+    def update_applicant(self, idx, action, label):
         # Implement logic to update the applicant based on the action taken
         features = self.data["features"][idx]
-        label = self.data["label"][idx]
         features = self.update_features(features, action, label)
         self.data["features"][idx] = features
 
-        group = self.data["group"][idx]
-        label = self.get_label(features, group)
-        pred = self.get_label_pred(features, group)
-        action = self.get_action(features, group)
-        self.data["label"][idx] = label
-        self.data["pred"][idx] = pred
-        self.data["action"][idx] = action
+        return
 
     def update_features(self, features, action, label):
         return features
@@ -256,6 +302,8 @@ class LendingEnv(ResamplingEnv):
         ]
         self.n_groups = 2
         self.cost = cost
+        if distributions == "fico_no_decay":
+            self.cost = 0.5
         self.n_applicants = n_applicants
         self.n_features = 10
         if "setting" in distributions:
@@ -439,19 +487,13 @@ class LendingEnv(ResamplingEnv):
         for i in range(self.n_applicants):
             g = np.random.choice(num_groups, p=groups_probs)
             x = np.random.choice(num_features, p=cluster_probs[g])
-            label = self.get_label(x, g)
             # one hot encode group and x
             features = np.zeros(num_features, dtype=np.float32)
             features[x] = 1
             group = np.zeros(num_groups, dtype=np.float32)
             group[g] = 1
-            pred = self.get_label_pred(features, group)
-            action = self.get_action(features, group)
             self.init_data["group"][i] = g
             self.init_data["features"][i] = features
-            self.init_data["label"][i] = label
-            self.init_data["pred"][i] = pred
-            self.init_data["action"][i] = action
 
     def update_features(self, features, action, label):
         if action == 0:
@@ -466,8 +508,6 @@ class LendingEnv(ResamplingEnv):
 
         if self.distributions == "fico_no_decay":
             new_score = max(score, new_score)
-            if np.random.rand() < 1:
-                new_score = min(score + 1, num_features - 1)
 
         features[score] = 0
         features[new_score] = 1
@@ -489,7 +529,7 @@ class EnemEnv(ResamplingEnv):
     ):
         super().__init__(
             n_groups=2,
-            n_features=128,
+            n_features=126,
             cost=cost,
             n_applicants=n_applicants,
             utility_method=utility_method,
@@ -506,7 +546,7 @@ class EnemEnv(ResamplingEnv):
 
         def sample_label(x, g):
             p = self.model.predict_proba(x[:-1].reshape(1, -1))[0, 1]
-            gain = x[-1] * 1
+            gain = x[-1] * 0.5
             p = min(gain + p, 1)
             return 1 if np.random.rand() < p else 0
 
@@ -521,9 +561,9 @@ class EnemEnv(ResamplingEnv):
             action = self.get_action(features, group)
             self.init_data["group"][i] = group
             self.init_data["features"][i] = features
-            self.init_data["label"][i] = label
-            self.init_data["pred"][i] = pred
-            self.init_data["action"][i] = action
+            # self.init_data["label"][i] = label
+            # self.init_data["pred"][i] = pred
+            # self.init_data["action"][i] = action
 
     def update_features(self, features, action, label):
         if action == 1 or label == 1:
