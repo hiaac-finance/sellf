@@ -93,17 +93,27 @@ class SELLF(OnPolicyAlgorithm):
         self.policy.save_history()
 
         losses_hist=[]
+        max_weight_g0 = 0
+        max_weight_g1 = 0
+
         steps = 0
         for epoch in range(100):
             for i, rollout_data in enumerate(self.memory.get(self.batch_size)):
+                group_0_idx = (rollout_data.groups[:, 0] == 1).nonzero()
+                group_1_idx = (rollout_data.groups[:, 1] == 1).nonzero()
+
+                if len(group_0_idx) == 0 or len(group_1_idx) == 0:
+                    continue
+
                 preds = self.policy.get_label_prob(rollout_data.observations)
                 with th.no_grad():
                     prob_rej = 1 - self.policy.get_action_prob(rollout_data.observations)
                     prob_accept_all = self.policy.get_action_all_prob(rollout_data.observations)
                     weights = prob_rej / (prob_accept_all)
 
-                group_0_idx = (rollout_data.groups[:, 0] == 1).nonzero()
-                group_1_idx = (rollout_data.groups[:, 1] == 1).nonzero()
+                
+                max_weight_g0 = max(max_weight_g0, weights[group_0_idx].max().item())
+                max_weight_g1 = max(max_weight_g1, weights[group_1_idx].max().item())
 
                 pred_loss = pred_criterion(preds, rollout_data.labels)
                 pred_loss = pred_loss * weights
@@ -127,6 +137,8 @@ class SELLF(OnPolicyAlgorithm):
 
         mean_loss = np.mean(losses_hist)
         self.logger.record("pred_loss", mean_loss)
+        self.logger.record("max_weight_g0", max_weight_g0)
+        self.logger.record("max_weight_g1", max_weight_g1)
 
 
     def train(self) -> None:
@@ -157,6 +169,9 @@ class SELLF(OnPolicyAlgorithm):
         r1 = 1 - self.rollout_buffer.actions[g1_idx].mean()
         aK_0 = self.rollout_buffer.prob_action_all[g0_idx].mean()
         aK_1 = self.rollout_buffer.prob_action_all[g1_idx].mean()
+
+        aK_min_g0 = self.rollout_buffer.prob_action_all[g0_idx].min().item()
+        aK_min_g1 = self.rollout_buffer.prob_action_all[g1_idx].min().item()
 
         if self.utility_method == "tpr":
             tphi_0 = (self.rollout_buffer.imputations[g0_idx]).mean()
@@ -334,6 +349,10 @@ class SELLF(OnPolicyAlgorithm):
 
         delta_pred_real = self.env.delta_pred_real
         self.logger.record("delta_pred_real", delta_pred_real)
+        self.logger.record("aK_min_g0", aK_min_g0)
+        self.logger.record("aK_min_g1", aK_min_g1)
+        self.logger.record("aK_g0", aK_0)
+        self.logger.record("aK_g1", aK_1)
         
         
 
