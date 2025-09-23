@@ -23,6 +23,7 @@ class ResamplingEnv(gym.Env):
         n_features: int = 10,
         utility_method: str = "accuracy",
         delta_method: str = "full",
+        history_size : int = 10_000,
         seed=None,
     ):
         assert utility_method in ["accuracy", "qualification", "tpr"]
@@ -33,6 +34,7 @@ class ResamplingEnv(gym.Env):
         self.n_features = n_features
         self.utility_method = utility_method
         self.delta_method = delta_method
+        self.history_size = n_applicants #history_size
         self.action_space = spaces.Discrete(2)
 
         resource_space = spaces.Box(
@@ -106,16 +108,15 @@ class ResamplingEnv(gym.Env):
         return self._get_observable_state()
 
     def start_history(self):
-        history_size = 2_000
         self.history = dict(
             [
-                (col, np.zeros(history_size, dtype=np.float32))
+                (col, np.zeros(self.history_size, dtype=np.float32))
                 for col in ["group", "label", "action", "pred"]
             ]
         )
         self.history_pos = 0
         # rum some iterations without updating features
-        for _ in range(history_size):
+        for _ in range(self.history_size):
             # randomly sample an applicant
             idx = np.random.choice(self.n_applicants, size=1)[0]
             group = self.init_data["group"][idx]
@@ -238,7 +239,7 @@ class ResamplingEnv(gym.Env):
             self.update_applicant(self.idx, action, label)
 
         self.history_pos += 1
-        if self.history_pos >= 2_000:
+        if self.history_pos >= self.history_size:
             self.history_pos = 0
 
         self.compute_disparity()
@@ -291,23 +292,16 @@ class LendingEnv(ResamplingEnv):
         seed=None,
     ):
         assert distributions in [
-            "fico",
             "fico_equal",
-            "fico_hard",
-            "fico_fast",
             "fico_no_decay",
-            "fico_test",
-            "setting1",
-            "setting2",
+            "fico_easy",
         ]
         self.n_groups = 2
         self.cost = cost
-        if distributions == "fico_no_decay":
+        if distributions == "fico_easy":
             self.cost = 0.5
         self.n_applicants = n_applicants
         self.n_features = 10
-        if "setting" in distributions:
-            self.n_features = 14
         self.utility_method = utility_method
         self.delta_method = delta_method
         self.distributions = distributions
@@ -332,138 +326,12 @@ class LendingEnv(ResamplingEnv):
             group_probs = data["group_likelihoods"]
             cluster_probs = data["cluster_probabilities"]
             success_probs = data["success_probabilities"]
-        elif (
-            self.distributions == "fico_equal" or self.distributions == "fico_no_decay"
-        ):
+        elif self.distributions in ["fico_equal", "fico_no_decay", "fico_easy"]:
             group_probs = [0.5, 0.5]
             with open("data/fico.pkl", "rb") as f:
                 data = pkl.load(f)
             cluster_probs = data["cluster_probabilities"]
             success_probs = data["success_probabilities"]
-        elif self.distributions == "fico_test":
-            group_probs = [0.5, 0.5]
-            with open("data/fico.pkl", "rb") as f:
-                data = pkl.load(f)
-            cluster_probs = data["cluster_probabilities"]
-            success_probs = data["success_probabilities"]
-            self.cost = 0.5
-        elif self.distributions == "fico_hard":
-            group_probs = [0.5, 0.5]
-            with open("data/fico.pkl", "rb") as f:
-                data = pkl.load(f)
-            cluster_probs = data["cluster_probabilities"]
-            success_probs = data["success_probabilities"]
-            shift_probs = [
-                [0.25, 0.7, 0.05],
-                [0.05, 0.85, 0.1],
-            ]
-        elif self.distributions == "setting1":
-            group_probs = [0.5, 0.5]
-            cluster_probs = [
-                [
-                    0.0,
-                    0.0,
-                    0.05,
-                    0.05,
-                    0.05,
-                    0.05,
-                    0.1,
-                    0.1,
-                    0.15,
-                    0.15,
-                    0.15,
-                    0.15,
-                    0.0,
-                    0.0,
-                ],
-                [
-                    0.05,
-                    0.05,
-                    0.05,
-                    0.05,
-                    0.1,
-                    0.1,
-                    0.15,
-                    0.15,
-                    0.15,
-                    0.15,
-                    0.0,
-                    0.0,
-                    0.0,
-                    0.0,
-                ],
-            ]
-            success_probs = [
-                0.773,
-                0.804,
-                0.833,
-                0.857,
-                0.879,
-                0.898,
-                0.914,
-                0.928,
-                0.939,
-                0.949,
-                0.958,
-                0.965,
-                0.970,
-                0.975,
-            ]
-            success_probs = [success_probs, success_probs]
-        elif self.distributions == "setting2":
-            group_probs = [0.5, 0.5]
-            cluster_probs = [
-                [
-                    0.0,
-                    0.0,
-                    0.05,
-                    0.05,
-                    0.05,
-                    0.05,
-                    0.1,
-                    0.1,
-                    0.15,
-                    0.15,
-                    0.15,
-                    0.15,
-                    0.0,
-                    0.0,
-                ],
-                [
-                    0.05,
-                    0.05,
-                    0.05,
-                    0.05,
-                    0.1,
-                    0.1,
-                    0.15,
-                    0.15,
-                    0.15,
-                    0.15,
-                    0.0,
-                    0.0,
-                    0.0,
-                    0.0,
-                ],
-            ]
-            success_probs = [
-                0.506,
-                0.594,
-                0.677,
-                0.750,
-                0.812,
-                0.861,
-                0.898,
-                0.927,
-                0.948,
-                0.963,
-                0.974,
-                0.982,
-                0.987,
-                0.991,
-            ]
-            success_probs = [success_probs, success_probs]
-
         return group_probs, cluster_probs, success_probs, shift_probs
 
     def _load_data(self):
@@ -521,7 +389,7 @@ class EnemEnv(ResamplingEnv):
 
     def __init__(
         self,
-        cost: float = 0.5,
+        cost: float = 0.4,
         n_applicants: int = 4_000,
         utility_method: str = "accuracy",
         delta_method: str = "full",
