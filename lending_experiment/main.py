@@ -22,9 +22,7 @@ sys.path.append("..")
 from lending_experiment.agents.ppo_wrapper_env import PPOEnvWrapper
 from lending_experiment.agents.ppo import PPO
 from lending_experiment.agents.pocar import POCAR
-from lending_experiment.agents.rrm import RRM
 from lending_experiment.agents.sellf import SELLF
-from lending_experiment.agents.simple_agent import SimpleAgent
 
 from lending_experiment.environments.resampling import (
     ResamplingEnv,
@@ -38,7 +36,7 @@ EXP_DIR = "./experiments"
 
 
 def get_env(env_name: str, utility_method: str, algorithm: str) -> ResamplingEnv:
-    if algorithm in ["pocar_full", "ppo", "rrm", "simple_agent"]:
+    if algorithm in ["pocar_full", "ppo"]:
         delta_method = "full"
     elif algorithm == "sellf":
         delta_method = "imputation"
@@ -67,15 +65,6 @@ def get_alg(env, config, device):
             device=device,
             **config["algorithm_params"],
         )
-    elif config["algorithm"] == "simple_agent":
-        model = SimpleAgent(
-            env=env,
-            policy_kwargs={
-                "use_predictor": config["use_predictor"],
-            },
-            device=device,
-            **config["algorithm_params"],
-        )
     elif config["algorithm"] == "pocar" or config["algorithm"] == "pocar_full":
         model = POCAR(
             env=env,
@@ -86,8 +75,8 @@ def get_alg(env, config, device):
             device=device,
             **config["algorithm_params"],
         )
-    elif config["algorithm"] == "rrm":
-        model = RRM(
+    elif config["algorithm"] == "sellf":
+        model = SELLF(
             env=env,
             policy_kwargs={
                 "use_predictor": config["use_predictor"],
