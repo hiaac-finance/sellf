@@ -21,6 +21,7 @@ class Agent(nn.Module):
         action_space: gym.spaces.Space,
         learning_rate: float,
         use_predictor: bool = False,
+        predictor: str = "linear",
     ):
         super().__init__()
         self.use_predictor = use_predictor
@@ -39,9 +40,19 @@ class Agent(nn.Module):
             nn.Tanh(),
             layer_init(nn.Linear(64, 2), std=0.01),
         )
-        self.predictor = nn.Sequential(
-            layer_init(nn.Linear(self.features_dim, 1), std=0.01),
-        )
+        if predictor == "linear":
+            self.predictor = nn.Sequential(
+                layer_init(nn.Linear(self.features_dim, 1), std=0.01),
+            )
+        else:
+            self.predictor = nn.Sequential(
+                layer_init(nn.Linear(self.features_dim, 64)),
+                nn.Tanh(),
+                layer_init(nn.Linear(64, 64)),
+                nn.Tanh(),
+                layer_init(nn.Linear(64, 1), std=0.01),
+            )
+    
 
         self.pred_optimizer = torch.optim.Adam(
             self.predictor.parameters(),
