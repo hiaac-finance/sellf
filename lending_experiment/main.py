@@ -38,7 +38,7 @@ EXP_DIR = "./experiments"
 def get_env(env_name: str, utility_method: str, algorithm: str) -> ResamplingEnv:
     if algorithm in ["pocar_full", "ppo"]:
         delta_method = "full"
-    elif algorithm == "sellf" or algorithm == "sellf_deep":
+    elif algorithm.find("sellf") != -1:
         delta_method = "imputation"
     else:
         delta_method = "accepted"
@@ -91,6 +91,18 @@ def get_alg(env, config, device):
             policy_kwargs={
                 "use_predictor": config["use_predictor"],
                 "predictor": "deep",
+            },
+            omega=config["omega"],
+            device=device,
+            **config["algorithm_params"],
+        )
+    
+    elif config["algorithm"] == "sellf_censored":
+        model = SELLF(
+            env=env,
+            policy_kwargs={
+                "use_predictor": config["use_predictor"],
+                "censored": True,
             },
             omega=config["omega"],
             device=device,

@@ -1,0 +1,15 @@
+name: sellf_deep
+algorithm_param_list : [
+  {"beta_1": 1, "beta_2": 0.01,},
+  {"beta_1": 2, "beta_2": 0.01,},
+  {"beta_1": 5, "beta_2": 0.01,},
+  {"beta_1": 10, "beta_2": 0.01,},
+  {"beta_1": 1, "beta_2": 0.05,},
+  {"beta_1": 2, "beta_2": 0.05,},
+  {"beta_1": 5, "beta_2": 0.05,},
+  {"beta_1": 10, "beta_2": 0.05,},
+  {"beta_1": 1, "beta_2": 0.1,},
+  {"beta_1": 2, "beta_2": 0.1,},
+  {"beta_1": 5, "beta_2": 0.1,},
+  {"beta_1": 10, "beta_2": 0.1,},
+]
