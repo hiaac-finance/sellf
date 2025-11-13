@@ -449,3 +449,73 @@ class EnemEnv(ResamplingEnv):
 
     def _is_done(self):
         return self.resource <= 0 or self.timestep >= 2048
+
+
+class COMPASEnv(ResamplingEnv):
+    """
+    Environment for school admission experiments.
+    """
+
+    def __init__(
+        self,
+        cost: float = 0.4,
+        n_applicants: int = 4_000,
+        utility_method: str = "accuracy",
+        delta_method: str = "full",
+        seed=None,
+    ):
+        super().__init__(
+            n_groups=2,
+            n_features=7,
+            cost=cost,
+            n_applicants=n_applicants,
+            utility_method=utility_method,
+            delta_method=delta_method,
+            seed=seed,
+        )
+
+    def _load_data(self):
+        with open("data/compas_pool.pkl", "rb") as f:
+            pool = pkl.load(f)
+
+        with open("data/compas_model.pkl", "rb") as f:
+            self.model = pkl.load(f)
+
+        def sample_label(x, g):
+            age_cat = np.argmax(x[0:3])
+            priors_count_cat = np.argmax(x[3:7])
+
+            p = self.model.get((g, age_cat, priors_count_cat), 0.0)
+            return 1 if np.random.rand() < p else 0
+
+        self.get_label = sample_label
+
+        for i in range(self.n_applicants):
+            group = pool[i]["group"]
+            features = pool[i]["features"]
+
+            self.init_data["group"][i] = group
+            self.init_data["features"][i] = features
+            # self.init_data["label"][i] = label
+            # self.init_data["pred"][i] = pred
+            # self.init_data["action"][i] = action
+
+    def update_features(self, features, action, label):
+        if action == 0: # jail
+            return features
+        
+        age_cat = np.argmax(features[0:3])
+        priors_count_cat = np.argmax(features[3:7])
+
+        # if bail
+        if label == 1: # reicividism
+            new_priors_count_cat = min(priors_count_cat + 1, 3)
+        else:
+            new_priors_count_cat = priors_count_cat
+
+        features[3 + priors_count_cat] = 0
+        features[3 + new_priors_count_cat] = 1
+        return features
+
+    def _is_done(self):
+        return self.resource <= 0 or self.timestep >= 2048

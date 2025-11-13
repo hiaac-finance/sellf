@@ -28,6 +28,7 @@ from lending_experiment.environments.resampling import (
     ResamplingEnv,
     LendingEnv,
     EnemEnv,
+    COMPASEnv,
 )
 import argparse
 from omegaconf import OmegaConf
@@ -52,6 +53,8 @@ def get_env(env_name: str, utility_method: str, algorithm: str) -> ResamplingEnv
         )
     elif env_name == "enem":
         env = EnemEnv(utility_method=utility_method, delta_method=delta_method, seed=0)
+    elif env_name == "compas":
+        env = COMPASEnv(utility_method=utility_method, delta_method=delta_method, seed=0)
     return env
 
 

@@ -1,0 +1,10 @@
+name: elbert
+algorithm_param_list: [
+  {"bias_coef" : 1},
+  {"bias_coef" : 5},
+  {"bias_coef" : 10},
+  {"bias_coef" : 200},
+  {"bias_coef" : 2000},
+  {"bias_coef" : 20_000},
+  {"bias_coef" : 200_000},
+]
