@@ -23,6 +23,8 @@ from lending_experiment.agents.ppo_wrapper_env import PPOEnvWrapper
 from lending_experiment.agents.ppo import PPO
 from lending_experiment.agents.pocar import POCAR
 from lending_experiment.agents.sellf import SELLF
+from lending_experiment.agents.elbert.ppo_fair import PPO_fair
+from lending_experiment.agents.elbert.policies_fair import ActorCriticPolicy_fair
 
 from lending_experiment.environments.resampling import (
     ResamplingEnv,
@@ -99,16 +101,31 @@ def get_alg(env, config, device):
             device=device,
             **config["algorithm_params"],
         )
-    
+
     elif config["algorithm"] == "sellf_censored":
         model = SELLF(
             env=env,
             policy_kwargs={
                 "use_predictor": config["use_predictor"],
-                "censored": True,
+                "censored": config["algorithm_params"]["censor"]
             },
             omega=config["omega"],
             device=device,
+            **config["algorithm_params"],
+        )
+
+    elif config["algorithm"] == "elbert":
+        POLICY_KWARGS_fair = dict(
+            activation_fn=torch.nn.ReLU, net_arch=dict(vf=[256, 128], pi=[256, 128])
+        )
+        model = PPO_fair(
+            ActorCriticPolicy_fair,
+            env,
+            policy_kwargs=POLICY_KWARGS_fair,
+            verbose=1,
+            device=device,
+            baselines_params={},
+            eval_kwargs={},
             **config["algorithm_params"],
         )
 
@@ -354,7 +371,3 @@ if __name__ == "__main__":
     if args.config_id < len(config_list):
         config = config_list[args.config_id]
         main(config)
-
-
-
-    
