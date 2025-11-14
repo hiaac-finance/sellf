@@ -74,6 +74,7 @@ class SELLF(OnPolicyAlgorithm):
         self.target_kl = target_kl
         self.predictor_steps = 25
         self.first_iter = True
+        self.calculate_error = False
 
         self._setup_model()
 
@@ -134,6 +135,45 @@ class SELLF(OnPolicyAlgorithm):
             self.logger.record("pred_lr", self.policy.pred_scheduler.get_last_lr()[0])
             if steps >= self.predictor_steps:
                 break
+        
+        if self.calculate_error:
+            # calculate weighted error on accepted
+            accepted_error_g0 = []
+            accepted_error_g1 = []
+            weights_g0 = []
+            weights_g1 = []
+            for i, rollout_data in enumerate(self.memory.get(self.batch_size)):
+                group_0_idx = (rollout_data.groups[:, 0] == 1).nonzero()
+                group_1_idx = (rollout_data.groups[:, 1] == 1).nonzero()
+            
+                preds = self.policy.get_label(rollout_data.observations)
+                with th.no_grad():
+                    prob_rej = 1 - self.policy.get_action_prob(rollout_data.observations)
+                    prob_accept_all = self.policy.get_action_all_prob(rollout_data.observations)
+                    weights = prob_rej / (prob_accept_all)
+            
+                errors = (preds - rollout_data.labels.view(-1)).abs()
+                accepted_error_g0.append(errors[group_0_idx].cpu().numpy())
+                accepted_error_g1.append(errors[group_1_idx].cpu().numpy())
+                weights_g0.append(weights[group_0_idx].cpu().numpy())
+                weights_g1.append(weights[group_1_idx].cpu().numpy())
+
+                if i >= 150:
+                    break
+
+
+            accepted_error_g0 = np.concatenate(accepted_error_g0)
+            accepted_error_g1 = np.concatenate(accepted_error_g1)
+            weights_g0 = np.concatenate(weights_g0)
+            weights_g1 = np.concatenate(weights_g1) 
+
+            pred_error_g0 = (accepted_error_g0 * weights_g0).sum() / (weights_g0.sum() + 1e-8)
+            pred_error_g1 = (accepted_error_g1 * weights_g1).sum() / (weights_g1.sum() + 1e-8)
+
+
+            self.logger.record("error_accepted_g0", pred_error_g0)
+            self.logger.record("error_accepted_g1", pred_error_g1)
+
 
         mean_loss = np.mean(losses_hist)
         self.logger.record("pred_loss", mean_loss)

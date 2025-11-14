@@ -458,7 +458,7 @@ class COMPASEnv(ResamplingEnv):
 
     def __init__(
         self,
-        cost: float = 0.4,
+        cost: float = 0.9,
         n_applicants: int = 4_000,
         utility_method: str = "accuracy",
         delta_method: str = "full",
@@ -466,7 +466,7 @@ class COMPASEnv(ResamplingEnv):
     ):
         super().__init__(
             n_groups=2,
-            n_features=7,
+            n_features=13,
             cost=cost,
             n_applicants=n_applicants,
             utility_method=utility_method,
@@ -482,10 +482,10 @@ class COMPASEnv(ResamplingEnv):
             self.model = pkl.load(f)
 
         def sample_label(x, g):
-            age_cat = np.argmax(x[0:3])
-            priors_count_cat = np.argmax(x[3:7])
+            age_cat = np.argmax(x[0:5])
+            priors_count_cat = np.argmax(x[5:13])
 
-            p = self.model.get((g, age_cat, priors_count_cat), 0.0)
+            p = 1 - self.model.get((g, age_cat, priors_count_cat), 0.0)
             return 1 if np.random.rand() < p else 0
 
         self.get_label = sample_label
@@ -504,17 +504,17 @@ class COMPASEnv(ResamplingEnv):
         if action == 0: # jail
             return features
         
-        age_cat = np.argmax(features[0:3])
-        priors_count_cat = np.argmax(features[3:7])
+        age_cat = np.argmax(features[0:5])
+        priors_count_cat = np.argmax(features[5:13])
 
         # if bail
         if label == 1: # reicividism
-            new_priors_count_cat = min(priors_count_cat + 1, 3)
+            new_priors_count_cat = min(priors_count_cat + 1, 7)
         else:
             new_priors_count_cat = priors_count_cat
 
-        features[3 + priors_count_cat] = 0
-        features[3 + new_priors_count_cat] = 1
+        features[5 + priors_count_cat] = 0
+        features[5 + new_priors_count_cat] = 1
         return features
 
     def _is_done(self):
