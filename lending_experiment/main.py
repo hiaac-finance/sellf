@@ -25,6 +25,9 @@ from lending_experiment.agents.pocar import POCAR
 from lending_experiment.agents.sellf import SELLF
 from lending_experiment.agents.elbert.ppo_fair import PPO_fair
 from lending_experiment.agents.elbert.policies_fair import ActorCriticPolicy_fair
+from lending_experiment.agents.cpo.cpo import CPO
+from lending_experiment.agents.cpo.models import build_bernouilli_policy, build_mlp
+from lending_experiment.agents.cpo.simulators import SinglePathSimulator
 
 from lending_experiment.environments.resampling import (
     ResamplingEnv,
@@ -56,7 +59,9 @@ def get_env(env_name: str, utility_method: str, algorithm: str) -> ResamplingEnv
     elif env_name == "enem":
         env = EnemEnv(utility_method=utility_method, delta_method=delta_method, seed=0)
     elif env_name == "compas":
-        env = COMPASEnv(utility_method=utility_method, delta_method=delta_method, seed=0)
+        env = COMPASEnv(
+            utility_method=utility_method, delta_method=delta_method, seed=0
+        )
     return env
 
 
@@ -128,6 +133,50 @@ def get_alg(env, config, device):
             eval_kwargs={},
             **config["algorithm_params"],
         )
+
+    elif config["algorithm"] == "cpo":
+        state_dim = env.observation_space.shape[0]
+        hidden_dims = [64, 64]
+        n_trajectories = 5
+        env_list = [
+            Monitor(PPOEnvWrapper(get_env(config["env_name"], config["mu_type"], config["algorithm"])))
+            for _ in range(n_trajectories)
+        ]
+        policy = build_bernouilli_policy(
+            state_dim,
+            hidden_dims,
+            1,
+        )
+        policy.to(device)
+        value_fun = build_mlp(
+            state_dim + 1,
+            hidden_dims,
+            1,
+        )
+        value_fun.to(device)
+        cost_fun = build_mlp(
+            state_dim + 1,
+            hidden_dims,
+            1,
+        )
+
+        cost_fun.to(device)
+        simulator = SinglePathSimulator(
+            env_list,
+            policy,
+            n_trajectories=n_trajectories,
+            trajectory_len=2_048,
+        )
+        model = CPO(
+            policy,
+            value_fun,
+            cost_fun,
+            simulator,
+            bias_red_cost=1.0,
+            max_constraint_val=0.5,
+        )
+        for e in env_list:
+            e.set_agent(model)
 
     return model
 
