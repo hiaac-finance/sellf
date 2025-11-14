@@ -22,11 +22,11 @@ class Agent(nn.Module):
         learning_rate: float,
         use_predictor: bool = False,
         predictor: str = "linear",
-        censored : bool = False,
+        censor : float = 0.0,
     ):
         super().__init__()
         self.use_predictor = use_predictor
-        self.censored = censored
+        self.censor = censor
         self.features_dim = np.array(observation_space.shape).prod()
         self.critic = nn.Sequential(
             layer_init(nn.Linear(self.features_dim, 64)),
@@ -85,7 +85,7 @@ class Agent(nn.Module):
         logits = self.actor(x)
         probs = Categorical(logits=logits)
         if action is None:
-            if self.censored and probs.probs[1] < 0.3:
+            if probs.probs[0, 1] < self.censor:
                 action = torch.tensor(0).to(self.device)
             else:
                 action = probs.sample()
@@ -100,7 +100,7 @@ class Agent(nn.Module):
         logits = self.actor(x)
         probs = Categorical(logits=logits)
         action = probs.sample()
-        if self.censored and probs.probs[1] < 0.3:
+        if probs.probs[0, 1] < self.censor:
             action = torch.tensor(0).to(self.device)
         return action
 
