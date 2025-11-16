@@ -76,6 +76,7 @@ class OnPolicyAlgorithm:
             action_space=self.action_space,
             learning_rate=self.learning_rate,
             use_predictor=self.policy_kwargs.get("use_predictor", False),
+            censor=self.policy_kwargs.get("censor", 0.0),
         )
         self.policy = self.policy.to(self.device)
 

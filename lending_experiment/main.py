@@ -112,7 +112,7 @@ def get_alg(env, config, device):
             env=env,
             policy_kwargs={
                 "use_predictor": config["use_predictor"],
-                "censored": config["algorithm_params"]["censor"]
+                "censor": config["algorithm_params"]["censor"],
             },
             omega=config["omega"],
             device=device,

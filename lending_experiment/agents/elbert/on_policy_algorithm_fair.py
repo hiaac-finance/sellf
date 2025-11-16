@@ -215,10 +215,28 @@ class OnPolicyAlgorithm_fair(BaseAlgorithm):
             infos = infos[0]
             group = infos["group"]
             label = infos["label"]
-            r_U_0 = 1 if group == 0 and actions == 1 and label == 1 else 0
-            r_U_1 = 1 if group == 1 and actions == 1 and label == 1 else 0
-            r_B_0 = 1 if group == 0 and label == 1 else 0
-            r_B_1 = 1 if group == 1 and label == 1 else 0
+            utility_method = env.get_attr('utility_method')[0]
+            if utility_method == 'qualification':
+                r_B_0 = 1 if group == 0 and actions == 1 else 0
+                r_B_1 = 1 if group == 1 and actions == 1 else 0
+
+                r_U_0 = r_B_0 if label == 1 else 0
+                r_U_1 = r_B_1 if label == 1 else 0
+
+            elif utility_method == "accuracy":
+                r_B_0 = 1 if group == 0 and actions == 1 else 0
+                r_B_1 = 1 if group == 1 and actions == 1 else 0
+
+                r_U_0 = r_B_0 if actions == label else 0
+                r_U_1 = r_B_1 if actions == label else 0
+
+            elif utility_method == "tpr":
+                r_B_0 = 1 if group == 0 and actions == 1 and actions == 1 else 0
+                r_B_1 = 1 if group == 1 and actions == 1 and actions == 1 else 0                 
+                
+                r_U_0 = 1 if group == 0 and actions == 1 and label == 1 else 0
+                r_U_1 = 1 if group == 1 and actions == 1 and label == 1 else 0
+            
 
             # increase rewards with info
             rewards = [
@@ -253,7 +271,6 @@ class OnPolicyAlgorithm_fair(BaseAlgorithm):
                         # TODO: check whether the following is correct
                         predicted_values = self.policy.predict_values(terminal_obs)
                         terminal_value = [predicted_values[0][0], [predicted_values[1][g][0] for g in range(self.num_groups)], [predicted_values[2][g][0] for g in range(self.num_groups)]]
-                    print(terminal_value)
                     rewards[0] += self.gamma * terminal_value[0]
                     for g in range(self.num_groups):
                         rewards[1][g] += self.gamma * terminal_value[1][g]

@@ -152,7 +152,7 @@ class SELLF(OnPolicyAlgorithm):
                     prob_accept_all = self.policy.get_action_all_prob(rollout_data.observations)
                     weights = prob_rej / (prob_accept_all)
             
-                errors = (preds - rollout_data.labels.view(-1)).abs()
+                errors = (preds - rollout_data.labels.view(-1))
                 accepted_error_g0.append(errors[group_0_idx].cpu().numpy())
                 accepted_error_g1.append(errors[group_1_idx].cpu().numpy())
                 weights_g0.append(weights[group_0_idx].cpu().numpy())

@@ -320,7 +320,7 @@ class PPO_fair(OnPolicyAlgorithm_fair):
                 for g in range(self.num_groups):
                     advantages_grad_ratio_U_B[g] = (1/value_B_estimate[g]) * advantages[1][g] - \
                         (value_U_estimate[g]/(value_B_estimate[g]**2)) * advantages[2][g]
-                #print(advantages_grad_ratio_U_B)
+
                 # advantage fair = adv_main_reward - alpha * sum_g (grad_h_g * adv_grad_ratio_U_B_g )
                 advantages_fair = self.main_reward_coef * advantages[0] + torch.matmul(advantages_grad_ratio_U_B.t(), grad_h.float()) * (- self.bias_coef)
 
@@ -378,13 +378,7 @@ class PPO_fair(OnPolicyAlgorithm_fair):
 
                 entropy_losses.append(entropy_loss.item())
 
-                # check if any loss is nan
-                if torch.isnan(policy_loss):
-                    print("policy")
-                if torch.isnan(value_loss):
-                    print("value")
-                if torch.isnan(entropy_loss):
-                    print("entropy")
+              
                 # final loss
                 loss = policy_loss + self.ent_coef * entropy_loss + self.vf_coef * value_loss 
 

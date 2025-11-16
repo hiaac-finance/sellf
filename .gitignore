@@ -15,3 +15,7 @@ log**
 **/exp.sh
 
 figures/
+
+*.out
+*.err
+*.sh
