@@ -1,6 +1,6 @@
 import numpy as np
 import torch
-from utils import torch_to_numpy
+from .utils import torch_to_numpy
 
 
 class DataGenerator:
@@ -42,7 +42,7 @@ class DataGenerator:
 
     def run_traj(self, env, policy, value_net, cvalue_net, running_stat,
                  score_queue, cscore_queue, gamma, c_gamma, gae_lam, c_gae_lam,
-                 dtype, device, constraint):
+                 dtype, device):
 
         batch_idx = 0
 
@@ -63,14 +63,8 @@ class DataGenerator:
                 act = torch_to_numpy(act).squeeze()
                 next_obs, rew, done, info = env.step(act)
 
+                cost = info['delta_obs']
 
-                if constraint == 'velocity':
-                    if 'y_velocity' not in info:
-                        cost = np.abs(info['x_velocity'])
-                    else:
-                        cost = np.sqrt(info['x_velocity'] ** 2 + info['y_velocity'] ** 2)
-                elif constraint == 'circle':
-                    cost = info['cost']
 
                 ret_eps += rew
                 cost_ret_eps += (c_gamma ** t) * cost

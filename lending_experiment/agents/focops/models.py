@@ -5,7 +5,6 @@ from torch.distributions import Normal, Categorical
 
 
 def mlp(input_size, hidden_sizes=(64, 64), activation='tanh'):
-
     if activation == 'tanh':
         activation = nn.Tanh
     elif activation == 'relu':
@@ -77,3 +76,79 @@ class Value(nn.Module):
         v_out = self.v_head(mlp_out)
         return v_out
 
+class CategoricalPolicy(nn.Module):
+    """
+    Policy for discrete actions; here: binary, so logits dim = 2
+    """
+    def __init__(self, obs_dim, act_dim, hidden_sizes=(64, 64), activation='tanh'):
+        super().__init__()
+
+        self.obs_dim = obs_dim
+        self.act_dim = act_dim  # for binary, act_dim = 2
+
+        self.mlp_net = mlp(obs_dim, hidden_sizes, activation)
+        self.logits_layer = nn.Linear(hidden_sizes[-1], act_dim)
+
+        self.logits_layer.weight.data.mul_(0.1)
+        self.logits_layer.bias.data.mul_(0.0)
+        self.device = torch.device("cpu")
+
+    def forward(self, obs):
+        """
+        Returns logits for each discrete action.
+        obs: [B, obs_dim]
+        logits: [B, act_dim]
+        """
+        out = self.mlp_net(obs)
+        logits = self.logits_layer(out)
+        return logits
+
+    def get_act(self, obs, deterministic=False):
+        """
+        obs: 1D or 2D tensor
+        Returns: integer action (0 or 1 for binary)
+        """
+        if obs.dim() == 1:
+            obs = obs.unsqueeze(0)
+
+        logits = self.forward(obs)
+        dist = Categorical(logits=logits)
+
+        if deterministic:
+            # Greedy action: argmax over logits
+            action = torch.argmax(logits, dim=-1)
+        else:
+            action = dist.sample()
+        return action.squeeze(0)  # return scalar for single state
+
+    def logprob(self, obs, act):
+        """
+        obs: [B, obs_dim]
+        act: [B] (LongTensor) with values in {0, 1} for binary
+
+        Returns:
+            logprob: [B, 1]
+            logits: [B, act_dim]
+        """
+        logits = self.forward(obs)
+        dist = Categorical(logits=logits)
+
+        if act.dim() == 2 and act.size(-1) == 1:
+            # If actions come in as [B, 1], squeeze to [B]
+            act = act.squeeze(-1)
+        act = act.long()
+
+        logprob = dist.log_prob(act).unsqueeze(-1)  # [B, 1]
+        return logprob, logits
+    
+
+    def get_label(self, x: torch.Tensor) -> torch.Tensor:
+        if x.dim == 1:
+            x = x.unsqueeze(0)
+        return torch.zeros(x.size(0), dtype=torch.long, device=x.device)
+
+    def get_action(self, x: torch.Tensor) -> torch.Tensor:
+        logits = self.forward(x)
+        probs = Categorical(logits=logits)
+        action = probs.sample()
+        return action

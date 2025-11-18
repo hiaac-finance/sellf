@@ -25,6 +25,8 @@ from lending_experiment.agents.pocar import POCAR
 from lending_experiment.agents.sellf import SELLF
 from lending_experiment.agents.elbert.ppo_fair import PPO_fair
 from lending_experiment.agents.elbert.policies_fair import ActorCriticPolicy_fair
+from lending_experiment.agents.focops.focops import FOCOPS
+from lending_experiment.agents.fppo import FPPO
 from lending_experiment.agents.cpo.cpo import CPO
 from lending_experiment.agents.cpo.models import build_bernouilli_policy, build_mlp
 from lending_experiment.agents.cpo.simulators import SinglePathSimulator
@@ -89,6 +91,17 @@ def get_alg(env, config, device):
             device=device,
             **config["algorithm_params"],
         )
+    elif config["algorithm"] == "fppo":
+        model = FPPO(
+            env=env,
+            policy_kwargs={
+                "use_predictor": config["use_predictor"],
+            },
+            omega=config["omega"],
+            device=device,
+            **config["algorithm_params"],
+        )
+        env.wasserstein = True
     elif config["algorithm"] == "sellf":
         model = SELLF(
             env=env,

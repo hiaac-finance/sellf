@@ -8,7 +8,7 @@
 #SBATCH --cpus-per-task=1
 #SBATCH --mail-user=g272455@dac.unicamp.br
 #SBATCH --mail-type=BEGIN,END,FAIL
-#SBATCH --array=0-24%13
+#SBATCH --array=0-24
 source ~/miniconda3/bin/activate
 conda activate fairrl
 cd /home/giovani.valdrighi/fairrl/lending_experiment
