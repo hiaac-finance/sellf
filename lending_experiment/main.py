@@ -42,7 +42,7 @@ EXP_DIR = "./experiments"
 
 
 def get_env(env_name: str, utility_method: str, algorithm: str) -> ResamplingEnv:
-    if algorithm in ["pocar_full", "ppo"]:
+    if algorithm in ["pocar_full", "ppo", "pocar_full_v2"]:
         delta_method = "full"
     elif algorithm.find("sellf") != -1:
         delta_method = "imputation"
@@ -75,7 +75,11 @@ def get_alg(env, config, device):
             device=device,
             **config["algorithm_params"],
         )
-    elif config["algorithm"] == "pocar" or config["algorithm"] == "pocar_full":
+    elif (
+        config["algorithm"] == "pocar"
+        or config["algorithm"] == "pocar_full"
+        or config["algorithm"] == "pocar_full_v2"
+    ):
         model = POCAR(
             env=env,
             policy_kwargs={
@@ -107,7 +111,7 @@ def get_alg(env, config, device):
             **config["algorithm_params"],
         )
 
-    elif config["algorithm"] == "sellf_censored":
+    elif config["algorithm"].find("sellf_censored") != -1:
         model = SELLF(
             env=env,
             policy_kwargs={

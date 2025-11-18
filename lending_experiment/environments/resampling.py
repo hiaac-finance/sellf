@@ -101,7 +101,8 @@ class ResamplingEnv(gym.Env):
         """Resets the environment."""
         self.timestep = 0
         self.resource = 1_000
-        self.data = deepcopy(self.init_data)
+        np.copyto(self.data["features"], self.init_data["features"])
+        np.copyto(self.data["group"], self.init_data["group"])
         self.start_history()
         self.sample_applicant()
         self.compute_disparity()

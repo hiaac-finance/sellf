@@ -1,0 +1,6 @@
+name: pocar_full_v2
+algorithm_param_list : [
+  {"beta_1": 20, "beta_2": 20,},
+  {"beta_1": 50, "beta_2": 50,},
+  {"beta_1": 100, "beta_2": 100,},
+]

@@ -1,4 +1,4 @@
-name: sellf_censored
+name: sellf_censored_3
 algorithm_param_list : [
   {"beta_1": 1, "beta_2": 0.01, "censor" : 0.3},
   {"beta_1": 2, "beta_2": 0.01, "censor" : 0.3},
