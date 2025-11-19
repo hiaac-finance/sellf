@@ -64,6 +64,8 @@ class DataGenerator:
                 next_obs, rew, done, info = env.step(act)
 
                 cost = info['delta_obs']
+                if cost == 0:
+                    cost = np.random.rand() * 1e-8
 
 
                 ret_eps += rew

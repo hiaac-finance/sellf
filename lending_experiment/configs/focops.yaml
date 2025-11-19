@@ -1,4 +1,17 @@
 name: focops
+algorithm_param:
+  learning_rate: 5e-4
 algorithm_param_list: [
-  {}
+  {"cost_lim": 5, "nu_max" : 2},
+  {"cost_lim": 10, "nu_max" : 2},
+  {"cost_lim": 15, "nu_max" : 2},
+  {"cost_lim": 5, "nu_max" : 5},
+  {"cost_lim": 10, "nu_max" : 5},
+  {"cost_lim": 15, "nu_max" : 5},
+  {"cost_lim": 5, "nu_max" : 20},
+  {"cost_lim": 10, "nu_max" : 20},
+  {"cost_lim": 15, "nu_max" : 20},
+  {"cost_lim": 5, "nu_max" : 100},
+  {"cost_lim": 10, "nu_max" : 100},
+  {"cost_lim": 15, "nu_max" : 100},
 ]

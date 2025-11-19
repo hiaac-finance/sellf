@@ -30,37 +30,42 @@ class FOCOPS:
     Implement FOCOPS algorithm
     """
     def __init__(self,
-                env,
-                learning_rate = 3e-4,
-                max_iter_num = 500,
-                num_epochs = 10,
-                mb_size = 64,
-                gamma = 0.99,
-                c_gamma = 0.99,
-                gae_lam = 0.95,
-                c_gae_lam = 0.95,
-                l2_reg = 1e-3,
-                lam = 1.5,
-                delta = 0.02,
-                eta = 0.02,
-                nu = 0,
-                nu_lr = 0.01,
-                nu_max =2.0,
-                cost_lim = 0.1,
-                batch_size = 2048,
-                max_eps_len = 1000,
-                ):
+        env,
+        learning_rate = 1e-5,
+        max_iter_num = 500,
+        n_epochs = 10,
+        batch_size = 64,
+        gamma = 0.99,
+        c_gamma = 0.99,
+        gae_lambda = 0.95,
+        c_gae_lambda = 0.95,
+        l2_reg = 1e-3,
+        lam = 1.5,
+        delta = 0.02,
+        eta = 0.02,
+        nu = 0,
+        nu_lr = 0.01,
+        nu_max =2.0,
+        cost_lim = 0.1,
+        n_steps = 2048,
+        max_eps_len = 10_000,
+        clip_range = 0.2,
+        normalize_advantage = True,
+        ent_coef = 0.,
+        vf_coef = 0.5,
+        max_grad_norm = 0.5,
+    ):
 
 
         self.env = env
         self.learning_rate = learning_rate
         self.max_iter_num = max_iter_num
-        self.num_epochs = num_epochs
-        self.mb_size = mb_size
+        self.n_epochs = n_epochs
+        self.batch_size = batch_size
         self.gamma = gamma
         self.c_gamma = c_gamma
-        self.gae_lam = gae_lam
-        self.c_gae_lam = c_gae_lam
+        self.gae_lambda = gae_lambda
+        self.c_gae_lambda = c_gae_lambda
         self.l2_reg = l2_reg
         self.lam = lam
         self.delta = delta
@@ -69,7 +74,7 @@ class FOCOPS:
         self.nu_lr = nu_lr
         self.nu_max = nu_max
         self.cost_lim = cost_lim
-        self.batch_size = batch_size
+        self.n_steps = n_steps
         self.max_eps_len = max_eps_len
 
         self.obs_dim = env.observation_space.shape[0]
@@ -97,13 +102,13 @@ class FOCOPS:
         self.cvf_optimizer = torch.optim.Adam(self.cvalue_net.parameters(), self.learning_rate)
 
         # Initialize learning rate scheduler
-        lr_lambda = lambda it: max(1.0 - it / self.max_iter_num, 0)
-        self.pi_scheduler = torch.optim.lr_scheduler.LambdaLR(self.pi_optimizer, lr_lambda=lr_lambda)
-        self.vf_scheduler = torch.optim.lr_scheduler.LambdaLR(self.vf_optimizer, lr_lambda=lr_lambda)
-        self.cvf_scheduler = torch.optim.lr_scheduler.LambdaLR(self.cvf_optimizer, lr_lambda=lr_lambda)
+        #lr_lambda = lambda it: max(1.0 - it / self.max_iter_num, 0)
+        #self.pi_scheduler = torch.optim.lr_scheduler.LambdaLR(self.pi_optimizer, lr_lambda=lr_lambda)
+        #self.vf_scheduler = torch.optim.lr_scheduler.LambdaLR(self.vf_optimizer, lr_lambda=lr_lambda)
+        #self.cvf_scheduler = torch.optim.lr_scheduler.LambdaLR(self.cvf_optimizer, lr_lambda=lr_lambda)
 
         # Initialize RunningStat for state normalization, score queue, logger
-        self.running_stat = RunningStats(clip=5)
+        self.running_stat = None #RunningStats(clip=5)
         self.score_queue = deque(maxlen=100)
         self.cscore_queue = deque(maxlen=100)
 
@@ -134,7 +139,7 @@ class FOCOPS:
         # Store in TensorDataset for minibatch updates
         dataset = torch.utils.data.TensorDataset(obs, act, vtarg, adv, cvtarg, cadv,
                                                  old_logprob, old_logits)
-        loader = torch.utils.data.DataLoader(dataset=dataset, batch_size=self.mb_size, shuffle=True)
+        loader = torch.utils.data.DataLoader(dataset=dataset, batch_size=self.batch_size, shuffle=True)
         avg_cost = rollout['avg_cost']
 
 
@@ -145,8 +150,11 @@ class FOCOPS:
         elif self.nu > self.nu_max:
             self.nu = self.nu_max
 
+        pi_loss_list = []
+        vf_loss_list = []
+        cvf_loss_list = []
 
-        for epoch in range(self.num_epochs):
+        for epoch in range(self.n_epochs):
 
             for _, (obs_b, act_b, vtarg_b, adv_b, cvtarg_b, cadv_b,
                     old_logprob_b, old_logits_b) in enumerate(loader):
@@ -159,6 +167,7 @@ class FOCOPS:
                 # weight decay
                 for param in self.value_net.parameters():
                     self.vf_loss += param.pow(2).sum() * self.l2_reg
+                vf_loss_list.append(self.vf_loss.item())
                 self.vf_optimizer.zero_grad()
                 self.vf_loss.backward()
                 self.vf_optimizer.step()
@@ -169,6 +178,7 @@ class FOCOPS:
                 # weight decay
                 for param in self.cvalue_net.parameters():
                     self.cvf_loss += param.pow(2).sum() * self.l2_reg
+                cvf_loss_list.append(self.cvf_loss.item())
                 self.cvf_optimizer.zero_grad()
                 self.cvf_loss.backward()
                 self.cvf_optimizer.step()
@@ -181,6 +191,7 @@ class FOCOPS:
                 self.pi_loss = (kl_new_old - (1 / self.lam) * ratio * (adv_b - self.nu * cadv_b)) \
                           * (kl_new_old.detach() <= self.eta).type(dtype)
                 self.pi_loss = self.pi_loss.mean()
+                pi_loss_list.append(self.pi_loss.item())
                 self.pi_optimizer.zero_grad()
                 self.pi_loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.policy.parameters(), 40)
@@ -197,7 +208,14 @@ class FOCOPS:
             
         self.logger.record("accept_rate", np.mean(rollout["actions"]))
         self.logger.record("reward", np.mean(self.score_queue))
-        self.logger.record("cost", np.mean(self.cscore_queue))
+        self.logger.record("cost", avg_cost)
+        self.logger.record("pi_loss", np.mean(pi_loss_list))
+        self.logger.record("vf_loss", np.mean(vf_loss_list))
+        self.logger.record("cvf_loss", np.mean(cvf_loss_list))
+
+        #print("Reward: ", np.mean(self.score_queue), " Cost: ", avg_cost, " Nu: ", self.nu)
+        #print("Pi loss: ", self.pi_loss.item(), " Vf loss: ", self.vf_loss.item(), " CVf loss: ", self.cvf_loss.item())
+
 
 
         # Store everything in log
@@ -223,10 +241,9 @@ class FOCOPS:
 
     def learn(self, total_timesteps):
         n_episodes = total_timesteps // 2_000
-        n_episodes = 10
 
         for i in range(n_episodes):
-            data_generator = DataGenerator(self.obs_dim, 1, self.batch_size, self.max_eps_len)
+            data_generator = DataGenerator(self.obs_dim, 1, self.n_steps, self.max_eps_len)
             rollout = data_generator.run_traj(
                 self.env, 
                 self.policy, 
@@ -237,16 +254,16 @@ class FOCOPS:
                 self.cscore_queue,
                 self.gamma, 
                 self.c_gamma, 
-                self.gae_lam, 
-                self.c_gae_lam,
+                self.gae_lambda, 
+                self.c_gae_lambda,
                 torch.float32, 
                 self.device, 
             )
 
             self.update_params(rollout, torch.float32, self.device)
-            self.pi_scheduler.step()
-            self.vf_scheduler.step()
-            self.cvf_scheduler.step()
+            #self.pi_scheduler.step()
+            #self.vf_scheduler.step()
+            #self.cvf_scheduler.step()
 
             self.logger.dump(step = i)
 

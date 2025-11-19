@@ -3,6 +3,11 @@ import torch.nn as nn
 import torch
 from torch.distributions import Normal, Categorical
 
+def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
+    nn.init.orthogonal_(layer.weight, std)
+    nn.init.constant_(layer.bias, bias_const)
+    return layer
+
 
 def mlp(input_size, hidden_sizes=(64, 64), activation='tanh'):
     if activation == 'tanh':
@@ -87,10 +92,8 @@ class CategoricalPolicy(nn.Module):
         self.act_dim = act_dim  # for binary, act_dim = 2
 
         self.mlp_net = mlp(obs_dim, hidden_sizes, activation)
-        self.logits_layer = nn.Linear(hidden_sizes[-1], act_dim)
+        self.logits_layer = layer_init(nn.Linear(hidden_sizes[-1], act_dim), std = 0.01)
 
-        self.logits_layer.weight.data.mul_(0.1)
-        self.logits_layer.bias.data.mul_(0.0)
         self.device = torch.device("cpu")
 
     def forward(self, obs):
