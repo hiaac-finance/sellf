@@ -145,7 +145,7 @@ class ResamplingEnv(gym.Env):
             actions_g = actions[groups == i]
             self.utility_values[i] = self.compute_utility(actions_g, labels_g)
 
-        self.delta = self.utility_values[1] - self.utility_values[0]
+        self.delta = abs(self.utility_values[1] - self.utility_values[0])
         old_delta = self.delta_obs
         if self.delta_method == "full":
             self.utility_values_obs = self.utility_values
@@ -178,7 +178,7 @@ class ResamplingEnv(gym.Env):
                     else 0
                 )
 
-        self.delta_obs = self.utility_values_obs[1] - self.utility_values_obs[0]
+        self.delta_obs = abs(self.utility_values_obs[1] - self.utility_values_obs[0])
         self.delta_delta = abs(self.delta_obs) - abs(old_delta)
 
         #### calculate delta_pred
