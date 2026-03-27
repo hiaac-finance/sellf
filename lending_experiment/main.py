@@ -140,7 +140,6 @@ def get_alg(env, config, device):
     elif config["algorithm"] == "focops":
         model = FOCOPS(
             env,
-            cost_lim = 10,
             **config["algorithm_params"],
         )
 
@@ -160,8 +159,13 @@ def train(train_timesteps, env, save_dir, config, device):
     Path(save_dir).mkdir(parents=True, exist_ok=True)
 
     model.set_logger(configure(folder=save_dir, format_strings=["csv"]))
+    start = time.time()
     model.learn(total_timesteps=train_timesteps)
+    end = time.time()
     model.save(save_dir + "/final_model")
+    # create a file with the time taken for training
+    with open(save_dir + "/train_time.txt", "w") as f:
+        f.write(f"{(end - start) / 60}")
 
 
 def plot_learning(env_name, mu_type, alg_name):

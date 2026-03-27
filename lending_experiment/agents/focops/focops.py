@@ -48,7 +48,7 @@ class FOCOPS:
         nu_max =2.0,
         cost_lim = 0.1,
         n_steps = 2048,
-        max_eps_len = 10_000,
+        max_eps_len = 2_000,
         clip_range = 0.2,
         normalize_advantage = True,
         ent_coef = 0.,
