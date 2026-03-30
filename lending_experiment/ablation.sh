@@ -14,8 +14,10 @@ conda activate fairrl
 cd /home/giovani.valdrighi/fairrl/lending_experiment
 
 # sellf
-python ablation.py --env_name fico_equal --algorithm sellf --mu_type accuracy --seed_id $SLURM_ARRAY_TASK_ID
+#python ablation.py --env_name fico_equal --algorithm sellf --mu_type accuracy --seed_id $SLURM_ARRAY_TASK_ID
 
+# ablation of beta_1
+python ablation_2.py --env_name fico_equal --algorithm sellf --mu_type tpr --seed_id $SLURM_ARRAY_TASK_ID
 
 
 
