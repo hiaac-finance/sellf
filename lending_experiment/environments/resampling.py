@@ -452,6 +452,77 @@ class EnemEnv(ResamplingEnv):
         return self.resource <= 0 or self.timestep >= 2048
 
 
+class EnemContEnv(ResamplingEnv):
+    """
+    Environment for school admission experiments with continuous features
+    """
+
+    def __init__(
+        self,
+        cost: float = 0.4,
+        n_applicants: int = 4_000,
+        utility_method: str = "accuracy",
+        delta_method: str = "full",
+        seed=None,
+    ):
+        super().__init__(
+            n_groups=2,
+            n_features=127,
+            cost=cost,
+            n_applicants=n_applicants,
+            utility_method=utility_method,
+            delta_method=delta_method,
+            seed=seed,
+        )
+
+    def _load_data(self):
+        with open("data/enemc_pool.pkl", "rb") as f:
+            pool = pkl.load(f)
+
+        with open("data/enemc_model.pkl", "rb") as f:
+            self.model = pkl.load(f)
+
+        def sample_label(x, g):
+            p = self.model.predict_proba(x[:-1].reshape(1, -1))[0, 1]
+            gain = x[-1] * 0.5
+            p = min(gain + p, 1)
+            return 1 if np.random.rand() < p else 0
+
+        self.get_label = sample_label
+
+        for i in range(self.n_applicants):
+            group = pool[i]["group"]
+            features = pool[i]["features"]
+
+            label = self.get_label(features, group)
+            pred = self.get_label_pred(features, group)
+            action = self.get_action(features, group)
+            self.init_data["group"][i] = group
+            self.init_data["features"][i] = features
+            # self.init_data["label"][i] = label
+            # self.init_data["pred"][i] = pred
+            # self.init_data["action"][i] = action
+    
+    def update_features(self, features, action, label):
+        if action == 1 or label == 1:
+            features[-1] = 1
+
+        group = features[0]
+        age_groups = 2
+        age = np.argmax(features[1 : 1 + age_groups])
+        new_age = min(age + 1, age_groups - 1)
+
+        new_features = features.copy()
+        new_features[1 + age] = 0
+        new_features[1 + new_age] = 1
+        return new_features
+
+    def _is_done(self):
+        return self.resource <= 0 or self.timestep >= 2048
+
+
+
+
 class COMPASEnv(ResamplingEnv):
     """
     Environment for school admission experiments.
