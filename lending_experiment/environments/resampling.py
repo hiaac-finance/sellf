@@ -289,23 +289,14 @@ class LendingEnv(ResamplingEnv):
         n_applicants: int = 10000,
         utility_method: str = "accuracy",
         delta_method: str = "full",
-        distributions: str = "fico",
         seed=None,
     ):
-        assert distributions in [
-            "fico_equal",
-            "fico_no_decay",
-            "fico_easy",
-        ]
         self.n_groups = 2
         self.cost = cost
-        if distributions == "fico_easy":
-            self.cost = 0.5
         self.n_applicants = n_applicants
         self.n_features = 10
         self.utility_method = utility_method
         self.delta_method = delta_method
-        self.distributions = distributions
         super().__init__(
             n_groups=self.n_groups,
             cost=self.cost,
@@ -317,35 +308,21 @@ class LendingEnv(ResamplingEnv):
         )
 
     def _load_probs(self):
-        shift_probs = [
-            [0, 1, 0],
-            [0, 1, 0],
-        ]
-        if self.distributions == "fico":
-            with open("data/fico.pkl", "rb") as f:
-                data = pkl.load(f)
-            group_probs = data["group_likelihoods"]
-            cluster_probs = data["cluster_probabilities"]
-            success_probs = data["success_probabilities"]
-        elif self.distributions in ["fico_equal", "fico_no_decay", "fico_easy"]:
-            group_probs = [0.5, 0.5]
-            with open("data/fico.pkl", "rb") as f:
-                data = pkl.load(f)
-            cluster_probs = data["cluster_probabilities"]
-            success_probs = data["success_probabilities"]
-        return group_probs, cluster_probs, success_probs, shift_probs
+        group_probs = [0.5, 0.5]
+        with open("data/fico.pkl", "rb") as f:
+            data = pkl.load(f)
+        cluster_probs = data["cluster_probabilities"]
+        success_probs = data["success_probabilities"]
+        return group_probs, cluster_probs, success_probs
 
     def _load_data(self):
-        groups_probs, cluster_probs, success_probs, shift_probs = self._load_probs()
+        groups_probs, cluster_probs, success_probs = self._load_probs()
 
         def sample_label(x, g):
             # if x is not an scalar, get the argmax
             if not np.isscalar(x):
                 x = np.argmax(x)
             y = np.random.binomial(n=1, p=success_probs[g][x])
-            shift_prob = shift_probs[g]
-            options = [0, y, 1]
-            y = np.random.choice(options, p=shift_prob)
             return y
 
         self.get_label = sample_label
@@ -365,6 +342,7 @@ class LendingEnv(ResamplingEnv):
             self.init_data["features"][i] = features
 
     def update_features(self, features, action, label):
+        """Updated credit score based on action and label. If action is rejection, credit score is kept the same"""
         if action == 0:
             return features
 
@@ -374,9 +352,6 @@ class LendingEnv(ResamplingEnv):
             new_score = min(score + 1, num_features - 1)
         elif label == 0:
             new_score = max(score - 1, 0)
-
-        if self.distributions == "fico_no_decay":
-            new_score = max(score, new_score)
 
         features[score] = 0
         features[new_score] = 1
@@ -430,9 +405,6 @@ class EnemEnv(ResamplingEnv):
             action = self.get_action(features, group)
             self.init_data["group"][i] = group
             self.init_data["features"][i] = features
-            # self.init_data["label"][i] = label
-            # self.init_data["pred"][i] = pred
-            # self.init_data["action"][i] = action
 
     def update_features(self, features, action, label):
         if action == 1 or label == 1:
@@ -467,7 +439,7 @@ class EnemContEnv(ResamplingEnv):
     ):
         super().__init__(
             n_groups=2,
-            n_features=127,
+            n_features=129,
             cost=cost,
             n_applicants=n_applicants,
             utility_method=utility_method,
@@ -499,9 +471,6 @@ class EnemContEnv(ResamplingEnv):
             action = self.get_action(features, group)
             self.init_data["group"][i] = group
             self.init_data["features"][i] = features
-            # self.init_data["label"][i] = label
-            # self.init_data["pred"][i] = pred
-            # self.init_data["action"][i] = action
     
     def update_features(self, features, action, label):
         if action == 1 or label == 1:
@@ -568,9 +537,6 @@ class COMPASEnv(ResamplingEnv):
 
             self.init_data["group"][i] = group
             self.init_data["features"][i] = features
-            # self.init_data["label"][i] = label
-            # self.init_data["pred"][i] = pred
-            # self.init_data["action"][i] = action
 
     def update_features(self, features, action, label):
         if action == 0: # jail
