@@ -19,67 +19,163 @@ import sys
 
 sys.path.append("..")
 
-from lending_experiment.agents.ppo_wrapper_env import PPOEnvWrapper
-from lending_experiment.agents.sellf import SELLF
+from fairrl.agents.ppo_wrapper_env import PPOEnvWrapper
+from fairrl.agents.ppo import PPO
+from fairrl.agents.pocar import POCAR
+from fairrl.agents.sellf import SELLF
+from fairrl.agents.elbert.ppo_fair import PPO_fair
+from fairrl.agents.elbert.policies_fair import ActorCriticPolicy_fair
+from fairrl.agents.focops.focops import FOCOPS
 
-from lending_experiment.environments.resampling import (
+from fairrl.environments.resampling import (
     ResamplingEnv,
     LendingEnv,
     EnemEnv,
+    EnemContEnv,
+    COMPASEnv,
 )
 import argparse
 from omegaconf import OmegaConf
 
+EXP_DIR = "./experiments"
 
-def get_env(env_name: str, utility_method: str, seed: int) -> ResamplingEnv:
-    delta_method = "imputation"
-    if "fico" in env_name or "setting" in env_name:
+
+def get_env(env_name: str, utility_method: str, algorithm: str, seed : int = 0) -> ResamplingEnv:
+    if algorithm in ["pocar_full", "ppo", "pocar_full_v2"]:
+        delta_method = "full"
+    elif algorithm.find("sellf") != -1:
+        delta_method = "imputation"
+    else:
+        delta_method = "accepted"
+    if "fico" in env_name:
         env = LendingEnv(
             utility_method=utility_method,
             delta_method=delta_method,
-            distributions=env_name,
             n_applicants=4_000,
             seed=seed,
         )
     elif env_name == "enem":
-        env = EnemEnv(
+        env = EnemEnv(utility_method=utility_method, delta_method=delta_method, seed=seed)
+    elif env_name == "enemc":
+        env = EnemContEnv(
+            utility_method=utility_method, delta_method=delta_method, seed=seed
+        )
+    elif env_name == "compas":
+        env = COMPASEnv(
             utility_method=utility_method, delta_method=delta_method, seed=seed
         )
     return env
 
 
 def get_alg(env, config, device):
-    model = SELLF(
-        env=env,
-        policy_kwargs={
-            "use_predictor": config["use_predictor"],
-        },
-        omega=config["omega"],
-        device=device,
-        **config["algorithm_params"],
-    )
+    if config["algorithm"] == "ppo":
+        model = PPO(
+            env=env,
+            policy_kwargs={
+                "use_predictor": config["use_predictor"],
+            },
+            device=device,
+            **config["algorithm_params"],
+        )
+    elif (
+        config["algorithm"] == "pocar"
+        or config["algorithm"] == "pocar_full"
+        or config["algorithm"] == "pocar_full_v2"
+    ):
+        model = POCAR(
+            env=env,
+            policy_kwargs={
+                "use_predictor": config["use_predictor"],
+            },
+            omega=config["omega"],
+            device=device,
+            **config["algorithm_params"],
+        )
+    elif config["algorithm"] == "sellf":
+        model = SELLF(
+            env=env,
+            policy_kwargs={
+                "use_predictor": config["use_predictor"],
+            },
+            omega=config["omega"],
+            device=device,
+            **config["algorithm_params"],
+        )
+    elif config["algorithm"] == "sellf_deep":
+        model = SELLF(
+            env=env,
+            policy_kwargs={
+                "use_predictor": config["use_predictor"],
+                "predictor": "deep",
+            },
+            omega=config["omega"],
+            device=device,
+            **config["algorithm_params"],
+        )
+
+    elif config["algorithm"].find("sellf_censored") != -1:
+        model = SELLF(
+            env=env,
+            policy_kwargs={
+                "use_predictor": config["use_predictor"],
+                "censor": config["algorithm_params"]["censor"],
+            },
+            omega=config["omega"],
+            device=device,
+            **config["algorithm_params"],
+        )
+
+    elif config["algorithm"] == "elbert":
+        POLICY_KWARGS_fair = dict(
+            activation_fn=torch.nn.ReLU, net_arch=dict(vf=[256, 128], pi=[256, 128])
+        )
+        model = PPO_fair(
+            ActorCriticPolicy_fair,
+            env,
+            policy_kwargs=POLICY_KWARGS_fair,
+            verbose=1,
+            device=device,
+            baselines_params={},
+            eval_kwargs={},
+            **config["algorithm_params"],
+        )
+
+
+    elif config["algorithm"] == "focops":
+        model = FOCOPS(
+            env,
+            **config["algorithm_params"],
+        )
+
     return model
 
 
-def train(train_timesteps, env, save_dir, config, device, seed):
+def train(train_timesteps, env, save_dir, config, device):
 
     env = PPOEnvWrapper(env=env)
     env = Monitor(env)
 
     model = get_alg(env, config, device)
-    model.set_random_seed(seed)
+    model.set_random_seed(0)
     env.set_agent(model)
 
     shutil.rmtree(save_dir, ignore_errors=True)
     Path(save_dir).mkdir(parents=True, exist_ok=True)
 
     model.set_logger(configure(folder=save_dir, format_strings=["csv"]))
+    start = time.time()
     model.learn(total_timesteps=train_timesteps)
+    end = time.time()
     model.save(save_dir + "/final_model")
+    # create a file with the time taken for training
+    with open(save_dir + "/train_time.txt", "w") as f:
+        f.write(f"{(end - start) / 60}")
 
 
-def plot_learning(exp_dir):
-    df_log = pd.read_csv(f"{exp_dir}/progress.csv")
+def plot_learning(env_name, mu_type, alg_name):
+    df_log = pd.read_csv(
+        f"experiments/{env_name}/{mu_type}/{alg_name}/models/progress.csv"
+    )
 
     # first, count the columns of the dataframe
     columns = sorted(df_log.columns.tolist())
@@ -139,7 +235,7 @@ def plot_learning(exp_dir):
         axs[i].set_ylabel("Value")
         # axs[i].legend()
     plt.tight_layout()
-    plt.savefig(f"{exp_dir}/learning.png")
+    plt.savefig(f"experiments/{env_name}/{mu_type}/{alg_name}/models/learning.png")
 
 
 def evaluate(env, agent, seeds, eval_dir, device):
@@ -151,14 +247,14 @@ def evaluate(env, agent, seeds, eval_dir, device):
         torch.manual_seed(seeds[ep])
         env.seed(seeds[ep])
 
+        env.start_history()
         obs = env.reset()
         done = False
         t = 0
         while not done:
             obs = np.array(obs).reshape(1, -1)
             obs = torch.tensor(obs, dtype=torch.float32).to(device)
-            action = agent.get_action(obs)
-            action = action.item()
+            action = agent.get_action(obs).item()
             pred = agent.get_label(obs).item()
 
             obs, _, done, infos = env.step(action)
@@ -202,17 +298,19 @@ def main(config):
     print(f"Config: {config}")
     print("-------------------------------------------------------------")
 
-    exp_dir = f"./experiments/ablation/{config['seed']}/{config['env_name']}/{config['mu_type']}/{config['exp_name']}"
+    exp_dir = (
+        f"./experiments/{config['env_name']}/{config['mu_type']}/{config['exp_name']}"
+    )
     Path(exp_dir).mkdir(parents=True, exist_ok=True)
     save_dir = f"{exp_dir}/models"
     eval_dir = f"{exp_dir}/eval"
     config["use_predictor"] = config["algorithm"].find("sellf") != -1
-    env = get_env(config["env_name"], config["mu_type"], config["seed"])
+    env = get_env(config["env_name"], config["mu_type"], config["algorithm"])
 
     # set seeds
-    random.seed(config["seed"])
-    np.random.seed(config["seed"])
-    torch.manual_seed(config["seed"])
+    random.seed(0)
+    np.random.seed(0)
+    torch.manual_seed(0)
 
     train(
         train_timesteps=config["train_timesteps"],
@@ -220,27 +318,30 @@ def main(config):
         save_dir=save_dir,
         config=config,
         device=device,
-        seed=config["seed"],
     )
 
-    plot_learning(save_dir)
+    try:
+        plot_learning(config["env_name"], config["mu_type"], config["exp_name"])
+    except:
+        pass
 
     # Initialize eval directory to store eval information
     shutil.rmtree(eval_dir, ignore_errors=True)
     Path(eval_dir).mkdir(parents=True, exist_ok=True)
 
     # Get random seeds
-    seeds = [config["seed"]]
+    eval_eps = 10
+    seeds = [random.randint(0, 10000) for _ in range(eval_eps)]
 
     with open(eval_dir + "/seeds.txt", "w") as f:
         f.write(str(seeds))
 
     model_path = f"{save_dir}/final_model"
-    env = get_env(config["env_name"], config["mu_type"], config["seed"])
+    env = get_env(config["env_name"], config["mu_type"], config["algorithm"])
     env = PPOEnvWrapper(env)
     agent = get_alg(env, config, device)
     agent.load(model_path)
-    agent.set_random_seed(config["seed"])
+    agent.set_random_seed(0)
     env.set_agent(agent)
 
     evaluate(
@@ -265,45 +366,19 @@ if __name__ == "__main__":
     args.add_argument("--algorithm", type=str, default="ppo")
     args.add_argument("--mu_type", type=str, default="accuracy")
     args.add_argument("--train_timesteps", type=int, default=500_000)
-    args.add_argument("--seed_id", type=int, default=0)
+    args.add_argument("--config_id", type=int, default=0)
     args = args.parse_args()
-
-    seed_list = [
-        8525,
-        2892,
-        5666,
-        3309,
-        6898,
-        2052,
-        8530,
-        8624,
-        7070,
-        8094,
-        1961,
-        2866,
-        9674,
-        9684,
-        9928,
-        9664,
-        8616,
-        2029,
-        9816,
-        8070,
-        3413,
-        2989,
-        2807,
-        4163,
-        7576,
-    ]
 
     # load config
     base_config = OmegaConf.load("configs/base.yaml")
-    algo_config = OmegaConf.load(f"configs/sellf_ablation.yaml")
+    algo_config = OmegaConf.load(f"configs/{args.algorithm}.yaml")
     config = OmegaConf.merge(base_config, algo_config)
 
+    # create config list for multiprocessing
+    config_list = []
     for i, params in enumerate(config.algorithm_param_list):
         params_info = " ".join([f"{k}:{v}" for k, v in params.items()])
-        params = OmegaConf.merge(config.algorithm_param, params)
+        params = OmegaConf.merge(params, config.algorithm_param)
         exp_name = args.algorithm + f"({params_info})"
         config_i = {
             "exp_name": exp_name,
@@ -313,6 +388,9 @@ if __name__ == "__main__":
             "train_timesteps": args.train_timesteps,
             "omega": 0.05,
             "algorithm_params": params,
-            "seed": seed_list[args.seed_id],
         }
-        main(config_i)
+        config_list.append(config_i)
+
+    if args.config_id < len(config_list):
+        config = config_list[args.config_id]
+        main(config)

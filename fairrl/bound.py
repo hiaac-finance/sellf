@@ -19,10 +19,10 @@ import sys
 
 sys.path.append("..")
 
-from lending_experiment.agents.ppo_wrapper_env import PPOEnvWrapper
-from lending_experiment.agents.sellf import SELLF
+from fairrl.agents.ppo_wrapper_env import PPOEnvWrapper
+from fairrl.agents.sellf import SELLF
 
-from lending_experiment.environments.resampling import (
+from fairrl.environments.resampling import (
     ResamplingEnv,
     LendingEnv,
     EnemEnv,

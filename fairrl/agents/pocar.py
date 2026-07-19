@@ -12,7 +12,7 @@ import time
 from stable_baselines3.common.utils import explained_variance
 
 
-from lending_experiment.agents.on_policy_algorithm import OnPolicyAlgorithm
+from fairrl.agents.on_policy_algorithm import OnPolicyAlgorithm
 
 
 class POCAR(OnPolicyAlgorithm):

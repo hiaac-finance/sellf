@@ -9,7 +9,7 @@ import torch as th
 from stable_baselines3.common.utils import obs_as_tensor
 
 from agents.buffers import RolloutBuffer, ReplayMemory
-from lending_experiment.agents.policy import Agent
+from fairrl.agents.policy import Agent
 from stable_baselines3.common.logger import Logger
 
 
