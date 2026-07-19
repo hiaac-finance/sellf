@@ -47,11 +47,10 @@ def get_env(env_name: str, utility_method: str, algorithm: str) -> ResamplingEnv
         delta_method = "imputation"
     else:
         delta_method = "accepted"
-    if "fico" in env_name or "setting" in env_name:
+    if "fico" in env_name:
         env = LendingEnv(
             utility_method=utility_method,
             delta_method=delta_method,
-            distributions=env_name,
             n_applicants=4_000,
             seed=0,
         )

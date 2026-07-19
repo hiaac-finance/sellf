@@ -140,33 +140,7 @@ class Agent(nn.Module):
         )
         self.actor_history[-1].load_state_dict(self.actor.state_dict())
 
-        # probs = np.arange(len(self.actor_history)) + 1
-        # probs =1 / probs
-        # probs = probs / probs.sum()
-        # selected_actors = np.random.choice(
-        #     len(self.actor_history), min(len(self.actor_history), 100), replace=False
-        # )
-        # selected_actors = [self.actor_history[i] for i in selected_actors]
-        # # create combined model
-        # self.weight_1 = torch.stack([m[0].weight for m in selected_actors])  # (100, 64, 10)
-        # self.bias_1 = torch.stack([m[0].bias for m in selected_actors])
-
-        # self.weight_2 = torch.stack([m[2].weight for m in selected_actors])  # (100, 64, 64)
-        # self.bias_2 = torch.stack([m[2].bias for m in selected_actors])
-
-        # self.weight_3 = torch.stack([m[4].weight for m in selected_actors])  # (100, 1, 64)
-        # self.bias_3 = torch.stack([m[4].bias for m in selected_actors])
-
     def get_action_all_prob(self, x: torch.Tensor) -> torch.Tensor:
-        # x = torch.matmul(self.weight_1, x.unsqueeze(-1)).squeeze(-1) + self.bias_1  # (100, 64, batch)
-        # x = torch.tanh(x)
-        # x = torch.matmul(self.weight_2, x).squeeze(-1) + self.bias_2
-        # x = torch.tanh(x)
-        # x = torch.matmul(self.weight_3, x).squeeze(-1) + self.bias_3  # (100, 2, batch)
-        # x = torch.softmax(x, dim=1)  # (100, 2, batch)
-        # x = x[:, 0, :]  # (100, batch)
-        # x = torch.prod(x, dim = 0)
-        # return 1 - x
         rej = torch.ones_like(x[:, 0])
 
         if len(self.actor_history) == 0:
