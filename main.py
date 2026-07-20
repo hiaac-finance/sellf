@@ -40,7 +40,9 @@ from omegaconf import OmegaConf
 EXP_DIR = "./experiments"
 
 
-def get_env(env_name: str, utility_method: str, algorithm: str, seed : int = 0) -> ResamplingEnv:
+def get_env(
+    env_name: str, utility_method: str, algorithm: str, seed: int = 0
+) -> ResamplingEnv:
     if algorithm in ["pocar_full", "ppo", "pocar_full_v2"]:
         delta_method = "full"
     elif algorithm.find("sellf") != -1:
@@ -55,7 +57,9 @@ def get_env(env_name: str, utility_method: str, algorithm: str, seed : int = 0) 
             seed=seed,
         )
     elif env_name == "enem":
-        env = EnemEnv(utility_method=utility_method, delta_method=delta_method, seed=seed)
+        env = EnemEnv(
+            utility_method=utility_method, delta_method=delta_method, seed=seed
+        )
     elif env_name == "enemc":
         env = EnemContEnv(
             utility_method=utility_method, delta_method=delta_method, seed=seed
@@ -140,7 +144,6 @@ def get_alg(env, config, device):
             **config["algorithm_params"],
         )
 
-
     elif config["algorithm"] == "focops":
         model = FOCOPS(
             env,
@@ -150,13 +153,13 @@ def get_alg(env, config, device):
     return model
 
 
-def train(train_timesteps, env, save_dir, config, device):
+def train(train_timesteps, env, save_dir, config, device, seed: int = 0):
 
     env = PPOEnvWrapper(env=env)
     env = Monitor(env)
 
     model = get_alg(env, config, device)
-    model.set_random_seed(0)
+    model.set_random_seed(seed)
     env.set_agent(model)
 
     shutil.rmtree(save_dir, ignore_errors=True)
