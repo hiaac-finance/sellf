@@ -1,42 +1,78 @@
 # Long-Term Fairness with Selective Labels
 
-This supplementary code contains the implementation for the experiments described in the paper "Long-Term Fairness with Selective Labels". The code is structured to facilitate running the main experiments as well as ablation studies.
+Code for the paper "[Long-Term Fairness with Selective Labels](https://arxiv.org/abs/2605.22291)" presented at ICML 2026. Code contains the implementation of proposed algorithm, baselines and experiments.
+
 
 ## Requirements
 
-We used conda for development with an environment with Python 3.8. To set up the environment, use the provided `environment.yml` file.
+conda was used for development with an environment with Python 3.8. To set up the environment, use the provided `environment.yml` file.
 
    ```bash
    conda env create -f environment.yml
    conda activate fairrl
    ```
 
-## Code Organization
+## Repository Structure
 
-- `enem.ipynb`: Jupyter notebook for data preprocessing of ENEM dataset.
-- `fico.ipynb`: Jupyter notebook for data preprocessing of FICO dataset.
-- `figures.ipynb`: Jupyter notebook for generating figures from results.
-- `main.py`: Script to run the main experiments.
-- `ablation.py`: Script to run ablation studies.
-- `config/`: Directory containing configuration of algorithms hyperparameters.
+- `fairrl/`: Directory containing the implementation of the proposed algorithm and baselines. The environment is implemented in `fairrl/environments/resampling.py` and all algorithms are implemented in `fairrl/agents/`. The `fairrl/configs/` directory contains the hyperparameter configurations for all algorithms.
+- `notebooks/`: Directory containing Jupyter notebooks for data preprocessing and figure generation.
+- `main.py`, `bound.py`, `ablation.py`: Scripts to run the main experiments, compute bounds and run ablation studies.
 
 ### Running the main experiment
 
 To run the main experiment, use:
 
-python main.py --env_name fico_equal --algorithm ppo --mu_type tpr --config_id $SLURM_ARRAY_TASK_ID
-
 ```bash
-python main.py --env_name <env_name> --algorithm <algorithm> --mu_type <mu_type> --config <config_file>
+python main.py --env_name <env_name> --algorithm <algorithm> --mu_type <mu_type> --config_id
 ```
 
-Where `<env_name>` is the environment name (e.g., `fico_equal`, `enem`), `<algorithm>` is the algorithm to use (e.g., `ppo`, `pocar`, `pocar_full`, `sellf`), and `<mu_type>` is the type of fairness metric (e.g., `tpr`, `accuracy`, `qualification`). --config is the id of the hyperparameter configuration to use.
+`<env_name>` is the environment selection and should be `fico`, `enem` or `compas`. `<algorithm>` is the algorithm to use and should be `ppo`, `pocar`, `pocar_full` or `sellf`. `<mu_type>` is the type of fairness metric and should be `tpr`, `accuracy` or `qualification`. --config_id is the id of the hyperparameter configuration to use.
+
 
 ### Running ablation studies
 
 To run ablation experiments, use:
 
 ```bash
-python ablation.py --env_name fico_equal --algorithm sellf --mu_type accuracy --seed_id <seed_id>
+python ablation.py --env_name <env_name> --algorithm <algorithm> --mu_type <mu_type> --seed_id <seed_id> --ablation_type <ablation_type>
 ```
-Where `<seed_id>` is the seed for the random number generator.
+
+Where `<seed_id>` is the seed for the random number generator. Select `--ablation_type` to be `beta1` or `beta2` to run the corresponding ablation study.
+
+### Running bound computation
+
+To compute the bounds, use:
+
+```bash
+python bound.py --env_name <env_name> --algorithm <algorithm> --mu_type <mu_type> --seed_id <seed_id>
+```
+
+This script runs in similar fashion to the main experiment, but computes the bounds for the given algorithm and environment.
+
+## Comments
+
+This code was built on top of the code from [Policy Optimization with Constraint Advantage Regularization](https://github.com/ericyangyu/pocar). ELBERT was obtained from the [official repository](https://github.com/umd-huang-lab/ELBERT) and FOCOPS was also obtained from the [official repository](https://github.com/ymzhang01/focops).
+
+
+Currently working in a a tiny implementation of the proposed algorithm! Contact me if you are interested.
+
+
+## Contact
+
+For any questions or issues, please reach me at: giovani.valdrighi at ic.unicamp.br
+
+
+## Citation
+
+If you use this code in your research, please cite the following paper:
+
+```
+@inproceedings{valdrighilong,
+  title={Long-term Fairness with Selective Labels},
+  author={Valdrighi, Giovani and Valera, Isabel and Raimundo, Marcos M},
+  booktitle={Forty-third International Conference on Machine Learning},
+  year={2026},
+}
+```
+
+
